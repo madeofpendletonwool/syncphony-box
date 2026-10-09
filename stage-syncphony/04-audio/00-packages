@@ -1,0 +1,11 @@
+# Audio stack: PipeWire (the Pi OS default) with its PulseAudio
+# compatibility layer — Chromium plays through pipewire-pulse, and
+# audio-setup selects the sink with pactl. See docs/adr/0004-audio-output.md.
+# pulseaudio-utils: pactl. alsa-utils: aplay for the on-Pi smoke checklist.
+pipewire
+pipewire-bin
+pipewire-alsa
+pipewire-pulse
+wireplumber
+pulseaudio-utils
+alsa-utils

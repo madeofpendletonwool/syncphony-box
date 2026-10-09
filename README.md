@@ -40,13 +40,13 @@ hardware or image build needed; install bats first (`apt install bats`).
 CI runs them on every PR and push.
 
 ### Continuous integration
-
 GitHub Actions builds the image natively on arm64 runners
 (`ubuntu-24.04-arm`) on every push to `main` and on every PR, runs the
 bats tests, runs the no-hardware smoke test (`scripts/smoke-test.sh`
 loop-mounts the built image and checks packages, enabled units, the locked
-first user, the first-boot seed files, the kiosk session, and the boot
-config file), and uploads the image as a workflow artifact.
+first user, the first-boot seed files, the kiosk session, the boot
+config file, and the audio stack), and uploads the image as a workflow
+artifact.
 
 ## The kiosk session
 
@@ -60,6 +60,38 @@ cursor, no console blanking). See [docs/adr/0002-kiosk-session.md](docs/adr/0002
 Every Chromium flag lives in one wrapper, `/usr/lib/syncphony-box/kiosk`,
 on the box — including the GPU flags that let Chromium use the Pi's GPU.
 The browser opens the server's `/tv` page.
+
+## Audio
+
+The box is the room's speaker: Chromium plays everything through the
+`<audio>` element on `/tv`, and the box's audio stack is PipeWire (the
+Raspberry Pi OS default) with WirePlumber. It runs as the `kiosk` user's
+own services, started at boot via [linger] — no login, no system-mode
+daemon. See [docs/adr/0004-audio-output.md](docs/adr/0004-audio-output.md).
+
+[linger]: https://www.freedesktop.org/software/systemd/man/latest/loginctl.html
+
+- `audio=` from `syncphony.txt` picks the sink at every boot
+  (`hdmi` = HDMI0, the port next to USB-C power; `hdmi2` = HDMI1;
+  `analog` = the Pi 4's 3.5 mm jack; `usb` = the first USB audio device).
+- The chosen sink is the default, at **100% and unmuted**. Nothing in the
+  box scales the sound down: the TV's remote (HDMI carries PCM) or the
+  room's own volume control sets the level.
+- The kiosk waits for the audio unit like it waits for the network, so
+  Chromium never starts before the audio server is up — and a
+  hotplug monitor re-applies the choice when outputs appear or disappear
+  (a TV that was off at boot and turns on later, HDMI unplugged and back).
+- Outputs never auto-suspend, so the first notes of a song aren't clipped
+  by a device wake-up.
+
+To try sound by hand on a box (from a console or SSH): `pactl info` shows
+the default sink, and this plays a test tone through it:
+
+```sh
+aplay /usr/share/sounds/alsa/Front_Center.wav   # or: pw-play /usr/share/sounds/alsa/Front_Center.wav
+```
+
+Changing `audio=` takes effect on the next boot.
 
 ## Configuration: syncphony.txt
 
@@ -75,7 +107,7 @@ the box from booting; bad values are logged and fall back to defaults.
 |---|---|---|---|
 | `server_url` | `https://…` | unset | the Syncphony server this box shows |
 | `name` | any text | unset | name in the room's Screens list; also the hostname (`Living room TV` → `living-room-tv`, advertised as `living-room-tv.local`) |
-| `audio` | `hdmi`, `hdmi2`, `analog`, `usb` | `hdmi` | where the sound goes |
+| `audio` | `hdmi`, `hdmi2`, `analog`, `usb` | `hdmi` | where the sound goes (`analog` is the Pi 4's jack — a Pi 5 has none; use `usb` for a DAC) |
 | `resolution` | e.g. `1920x1080@60` | auto | forces the HDMI mode (takes a reboot; the box reboots once on its own) |
 | `rotate` | `0`, `90`, `180`, `270` | `0` | rotates the screen (takes a reboot) |
 | `cec` | `on`, `off` | `on` | switch the TV's input when music starts |
@@ -105,6 +137,21 @@ CI can't boot a Pi; verify these on hardware when one is at hand:
   to the "no server set" page; an empty or garbage file boots to defaults.
 - A TV that's off at boot gets a picture when turned on later (`D` on the
   video= token), and `rotate=90` really rotates.
+- `aplay /usr/share/sounds/alsa/Front_Center.wav` (or `pw-play` on the same
+  file) plays the test tone from the chosen output, on both a Pi 4 and a
+  Pi 5.
+- `pactl info` shows the expected `Default Sink` for each `audio=` value —
+  set it on the card, boot, check, and confirm the sink is at 100%.
+- Cold boot with the TV **off**: turn the TV on, pair with audio — sound
+  plays through the TV, no login, no SSH (the hotplug monitor switched to
+  the HDMI sink when it appeared; if the stream doesn't follow without a
+  reload, that's a finding for ADR 0004).
+- `audio=usb` with a USB DAC: the DAC is the default sink and the test tone
+  plays through it after a reboot.
+- Unplug HDMI while music plays, plug it back: audio returns by itself.
+- An hour of real playback as the room's speaker — Navidrome (MP3 and
+  FLAC) and Spotify (Ogg): no gaps between songs, no drift, no clipped
+  first notes.
 
 
 ## Flashing

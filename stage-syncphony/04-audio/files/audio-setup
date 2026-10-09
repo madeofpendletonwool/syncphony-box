@@ -1,0 +1,231 @@
+#!/bin/sh
+# Syncphony box audio: pick the output sink named by audio= (syncphony.txt,
+# via /etc/syncphony-box/config.env), keep it the default at 100% and
+# unmuted, and follow hotplug. See docs/adr/0004-audio-output.md.
+#
+#   audio-setup apply     one-shot: wait for the PipeWire server, select the
+#                         sink for audio=, make it the default at 100%
+#   audio-setup monitor   apply, then re-apply whenever sinks, cards or the
+#                         server change (HDMI unplugged and back, TV that
+#                         was off at boot turned on later, USB DAC plugged)
+#
+# Never fails a boot: apply always exits 0. A missing server or a sink that
+# doesn't exist (yet) is a warning — the default sink is left alone until
+# the output appears and the monitor switches to it. PipeWire runs as the
+# kiosk user's user services (linger; enabled at image build by 04-audio).
+#
+# Test hooks (unit defaults shown): SB_PACTL (pactl), SB_CONFIG_ENV
+# (/etc/syncphony-box/config.env), SB_SLEEP (sleep).
+
+PACTL=${SB_PACTL:-pactl}
+CONFIG_ENV=${SB_CONFIG_ENV:-/etc/syncphony-box/config.env}
+SLEEP=${SB_SLEEP:-sleep}
+
+# The kiosk waits for the audio unit the way it waits for
+# network-online.target: bounded, never a hang.
+SERVER_WAIT_SECS=45
+# A sink that should exist (usb DAC, hdmi with the TV on) gets this long to
+# appear before this round gives up; the monitor re-applies when it shows.
+SINK_WAIT_SECS=8
+
+log() { echo "audio-setup: $*" >&2; }
+
+# PipeWire's pulse socket lives in the user's runtime dir. System services
+# get no PAM environment, so derive it from the uid.
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+	XDG_RUNTIME_DIR="/run/user/$(id -u)"
+	export XDG_RUNTIME_DIR
+fi
+
+wait_for_server() {
+	i=0
+	while [ "$i" -lt "$SERVER_WAIT_SECS" ]; do
+		"$PACTL" info >/dev/null 2>&1 && return 0
+		"$SLEEP" 1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# "pactl list sinks" -> one line per sink: <name> TAB <device.bus> TAB
+# <lowercase identifying text>. The match text carries the whole sink
+# stanza (names, descriptions, ALSA properties), because sink *names*
+# themselves flip between e.g. hdmi-stereo and stereo-fallback depending
+# on the TV's ELD — the ALSA strings inside don't.
+sinks_data() {
+	"$PACTL" list sinks 2>/dev/null | awk '
+		function emit() { if (name != "") print name "\t" bus "\t" blob }
+		/^Sink #/ {
+			emit()
+			name = ""; bus = ""; blob = ""
+		}
+		{
+			line = $0
+			gsub(/^[ \t]+/, "", line)
+			blob = blob " " tolower(line)
+			if (line ~ /^Name:/) {
+				sub(/^Name:[ \t]*/, "", line)
+				name = line
+			} else if (line ~ /^device\.bus = /) {
+				sub(/^device\.bus = /, "", line)
+				gsub(/"/, "", line)
+				bus = tolower(line)
+			}
+		}
+		END { emit() }
+	'
+}
+
+# The single stanza for one sink name (tabs kept), for the current-state
+# checks: setting the same volume again would fire the events that wake
+# the monitor in a loop.
+sink_block() {
+	"$PACTL" list sinks 2>/dev/null | awk -v want="$1" '
+		/^Sink #/ { inblk = 0 }
+		/^\tName: / {
+			line = $0
+			sub(/^\tName: */, "", line)
+			if (line == want) inblk = 1
+		}
+		inblk { print }
+	'
+}
+
+# Print the pulse sink name for audio=$1, or nothing. Markers are matched
+# against each sink's identifying text in order; the primary HDMI markers
+# are the vc4 driver's PCM names ("bcm2835 HDMI 1" = HDMI0, the port next
+# to USB-C power; "bcm2835 HDMI 2" = HDMI1) — the same on Pi 4 and Pi 5.
+# No silent wrong-port fallback: nothing matching means a warning upstream.
+pick_sink() {
+	audio=$1
+	data=$(sinks_data)
+	[ -n "$data" ] || return 0
+
+	case $audio in
+		hdmi)
+			set -- 'bcm2835 hdmi 1' 'vc4-hdmi-0' 'hdmi0'
+			;;
+		hdmi2)
+			set -- 'bcm2835 hdmi 2' 'vc4-hdmi-1' 'hdmi1'
+			;;
+		analog)
+			# The Pi 4 jack (the Pi 5 has none); never a USB headset
+			# whose text also says "headphones".
+			printf '%s\n' "$data" | awk -F '\t' '
+				$2 != "usb" && (index($3, "headphone") ||
+					(index($3, "bcm2835") && !index($3, "hdmi"))) {
+					print $1; exit
+				}
+			'
+			return 0
+			;;
+		usb)
+			# The first USB audio device.
+			usb_sink=$(printf '%s\n' "$data" |
+				awk -F '\t' '$2 == "usb" { print $1; exit }')
+			if [ -n "$usb_sink" ]; then
+				printf '%s\n' "$usb_sink"
+			else
+				printf '%s\n' "$data" |
+					awk -F '\t' 'index($3, "usb") { print $1; exit }'
+			fi
+			return 0
+			;;
+		*)
+			return 0
+			;;
+	esac
+
+	for marker in "$@"; do
+		choice=$(printf '%s\n' "$data" |
+			awk -F '\t' -v m="$marker" 'index($3, m) { print $1; exit }')
+		if [ -n "$choice" ]; then
+			printf '%s\n' "$choice"
+			return 0
+		fi
+	done
+	return 0
+}
+
+apply_once() {
+	audio=hdmi
+	if [ -r "$CONFIG_ENV" ]; then
+		audio=$(. "$CONFIG_ENV" 2>/dev/null; printf '%s' "${AUDIO:-hdmi}")
+	fi
+	case $audio in
+		hdmi|hdmi2|analog|usb) ;;
+		*)
+			log "unknown AUDIO '${audio}'; using hdmi"
+			audio=hdmi
+			;;
+	esac
+
+	if ! wait_for_server; then
+		log "PipeWire server not up after ${SERVER_WAIT_SECS}s; leaving audio alone"
+		return 0
+	fi
+
+	sink=$(pick_sink "$audio")
+	i=0
+	while [ -z "$sink" ] && [ "$i" -lt "$SINK_WAIT_SECS" ]; do
+		"$SLEEP" 1
+		i=$((i + 1))
+		sink=$(pick_sink "$audio")
+	done
+	if [ -z "$sink" ]; then
+		log "no sink matches audio=${audio}; leaving the default alone (the monitor switches when it appears)"
+		return 0
+	fi
+
+	current=$("$PACTL" get-default-sink 2>/dev/null || true)
+	if [ "$current" != "$sink" ]; then
+		"$PACTL" set-default-sink "$sink" 2>/dev/null ||
+			log "cannot make ${sink} the default sink"
+	fi
+
+	# 100% and unmuted, but only the calls something differs: the monitor
+	# re-runs this on every sink event.
+	block=$(sink_block "$sink")
+	if printf '%s\n' "$block" | grep -q '^[[:space:]]*Mute: yes'; then
+		"$PACTL" set-sink-mute "$sink" 0 2>/dev/null || true
+	fi
+	if ! printf '%s\n' "$block" | grep '^[[:space:]]*Volume: ' |
+		grep -q '/ 100% /'; then
+		"$PACTL" set-sink-volume "$sink" 100% 2>/dev/null || true
+	fi
+
+	log "audio=${audio}: sink ${sink} default, 100%, unmuted"
+	return 0
+}
+
+monitor() {
+	apply_once || true
+	log "following audio device changes"
+	while :; do
+		"$PACTL" subscribe 2>/dev/null | while IFS= read -r event; do
+			case $event in
+				*"on server"*|*"on sink #"*|*"on card #"*)
+					# Give WirePlumber a beat to finish (re)creating the
+					# device before re-selecting.
+					"$SLEEP" 2
+					apply_once || true
+					;;
+			esac
+		done
+		# subscribe died: the server went away. It comes back (user units
+		# restart); wait, re-apply, reconnect.
+		"$SLEEP" 5
+		apply_once || true
+	done
+}
+
+case ${1:-apply} in
+	apply) apply_once ;;
+	monitor) monitor ;;
+	*)
+		echo "usage: audio-setup [apply | monitor]" >&2
+		exit 2
+		;;
+esac
+
+exit 0

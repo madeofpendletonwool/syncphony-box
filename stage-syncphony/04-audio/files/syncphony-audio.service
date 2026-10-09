@@ -1,0 +1,17 @@
+[Unit]
+Description=Syncphony box audio output (sink from audio=, 100%, unmuted)
+Documentation=file:/usr/lib/syncphony-box/audio-setup
+Documentation=file:/usr/lib/syncphony-box/syncphony.txt
+# AUDIO= comes from config.env, written earlier in boot by the config unit.
+# PipeWire itself runs as the kiosk user's user services (linger); this unit
+# waits for it in the bounded way the kiosk waits for network-online.target.
+After=syncphony-box-config.service
+Before=syncphony-kiosk.service
+
+[Service]
+Type=oneshot
+User=kiosk
+ExecStart=/usr/lib/syncphony-box/audio-setup apply
+
+[Install]
+WantedBy=multi-user.target

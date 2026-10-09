@@ -7,8 +7,10 @@
 # are installed, the cloud-init first-boot machinery (which applies Raspberry
 # Pi Imager settings) is enabled, the first user is locked, the NoCloud
 # seed files are present on the boot partition, the kiosk session is in
-# place (user, unit, wrapper, boot tuning), and the boot config file
-# (syncphony.txt) ships on the boot partition fully commented out.
+# place (user, unit, wrapper, boot tuning), the boot config file
+# (syncphony.txt) ships on the boot partition fully commented out, and the
+# audio stack is in place (PipeWire user services for the kiosk user with
+# linger, the sink-selection units, the WirePlumber tuning).
 #
 # Later issues extend this test as the image grows (boxd, /data, ...).
 
@@ -53,7 +55,8 @@ sudo mount -o ro "${LOOP}p1" "${WORK}/boot"
 sudo mount -o ro "${LOOP}p2" "${WORK}/root"
 
 # --- packages ---------------------------------------------------------------
-for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi-daemon; do
+for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi-daemon \
+	pipewire pipewire-bin pipewire-alsa pipewire-pulse wireplumber pulseaudio-utils alsa-utils; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -69,7 +72,8 @@ for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi
 done
 
 # --- units ------------------------------------------------------------------
-for unit in cloud-config.service cloud-final.service syncphony-kiosk.service syncphony-box-config.service avahi-daemon.service; do
+for unit in cloud-config.service cloud-final.service syncphony-kiosk.service syncphony-box-config.service \
+	avahi-daemon.service syncphony-audio.service syncphony-audio-monitor.service; do
 	state="$(systemctl --root="${WORK}/root" is-enabled "${unit}" 2>/dev/null || true)"
 	if [ "${state}" = "enabled" ]; then
 		check "unit ${unit} enabled" ok
@@ -146,6 +150,45 @@ for key in server_url name audio resolution rotate cec; do
 		check "syncphony.txt documents ${key}" "no commented ${key}= line"
 	fi
 done
+
+# --- audio (PipeWire for the kiosk user, sink from audio=) -------------------
+if sudo test -x "${WORK}/root/usr/lib/syncphony-box/audio-setup"; then
+	check "audio setup installed executable" ok
+else
+	check "audio setup installed executable" "missing or not executable"
+fi
+
+# Linger starts the kiosk user's PipeWire at boot, without a login.
+if sudo test -f "${WORK}/root/var/lib/systemd/linger/kiosk"; then
+	check "kiosk user lingers (PipeWire at boot)" ok
+else
+	check "kiosk user lingers (PipeWire at boot)" "no linger file"
+fi
+
+USER_UNITS="var/lib/syncphony-box/.config/systemd/user"
+for unit in default.target.wants/pipewire.service default.target.wants/wireplumber.service \
+	default.target.wants/pipewire-pulse.service sockets.target.wants/pipewire.socket \
+	sockets.target.wants/pipewire-pulse.socket; do
+	if sudo test -e "${WORK}/root/${USER_UNITS}/${unit}" &&
+		sudo test -e "${WORK}/root/usr/lib/systemd/user/${unit##*/}"; then
+		check "kiosk user unit ${unit##*/} enabled" ok
+	else
+		check "kiosk user unit ${unit##*/} enabled" "symlink or target missing"
+	fi
+done
+
+if sudo grep -q 'session.suspend-timeout-seconds = 0' \
+	"${WORK}/root/var/lib/syncphony-box/.config/wireplumber/wireplumber.conf.d/50-syncphony-box.conf"; then
+	check "wireplumber keeps outputs unsuspended" ok
+else
+	check "wireplumber keeps outputs unsuspended" "conf missing or rule absent"
+fi
+
+if sudo grep -q 'syncphony-audio.service' "${WORK}/root/etc/systemd/system/syncphony-kiosk.service"; then
+	check "kiosk waits for the audio unit" ok
+else
+	check "kiosk waits for the audio unit" "no reference in syncphony-kiosk.service"
+fi
 
 # --- boot presentation ------------------------------------------------------
 CMDLINE=" $(sudo cat "${WORK}/boot/cmdline.txt") "

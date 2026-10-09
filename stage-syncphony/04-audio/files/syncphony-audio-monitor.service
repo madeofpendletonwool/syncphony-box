@@ -1,0 +1,15 @@
+[Unit]
+Description=Syncphony box audio hotplug monitor
+Documentation=file:/usr/lib/syncphony-box/audio-setup
+# Re-applies the sink selection when outputs appear or disappear: a TV that
+# was off at boot and turns on later, HDMI unplugged and back, a USB DAC.
+After=syncphony-audio.service
+
+[Service]
+User=kiosk
+ExecStart=/usr/lib/syncphony-box/audio-setup monitor
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

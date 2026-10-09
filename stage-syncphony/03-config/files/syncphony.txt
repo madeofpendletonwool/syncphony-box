@@ -10,7 +10,7 @@
 #server_url=https://syncphony.example.com
 # The box's name in the room's Screens list (also the hostname, slugified).
 #name=Living room TV
-# Where the sound goes: hdmi (default), hdmi2, analog, usb.
+# Where the sound goes: hdmi (default), hdmi2, analog (Pi 4 jack only), usb.
 #audio=hdmi
 # Force a mode if the TV reports a bad one: e.g. 1920x1080@60. Empty = auto.
 #resolution=
