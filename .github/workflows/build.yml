@@ -13,6 +13,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  tests:
+    # Fast unit tests (bats) for the box scripts; no image build needed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run tests
+        run: bats tests/
+
   image:
     # Native arm64 runner: pi-gen builds the arm64 rootfs natively instead of
     # through QEMU emulation.

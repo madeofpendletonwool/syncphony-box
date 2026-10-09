@@ -19,9 +19,8 @@ install -v -m 0755 files/kiosk "${ROOTFS_DIR}/usr/lib/syncphony-box/kiosk"
 install -v -m 0644 files/unconfigured.html "${ROOTFS_DIR}/usr/lib/syncphony-box/unconfigured.html"
 install -v -m 0644 files/syncphony-kiosk.service "${ROOTFS_DIR}/etc/systemd/system/syncphony-kiosk.service"
 
-# Where the server URL is read from until the boot config file
-# (syncphony.txt) lands; the kiosk wrapper reads it at start.
-install -v -d -m 0755 "${ROOTFS_DIR}/etc/syncphony-box"
+# /etc/syncphony-box/config.env (written from /boot/firmware/syncphony.txt
+# by syncphony-box-config.service) is created by 03-config.
 
 on_chroot << EOF
 install -d -o kiosk -g kiosk -m 0755 /var/lib/syncphony-box

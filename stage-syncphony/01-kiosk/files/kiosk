@@ -7,19 +7,20 @@
 set -eu
 
 DATA_DIR=/var/lib/syncphony-box/chromium
-URL_FILE=/etc/syncphony-box/url
+CONFIG_FILE=/etc/syncphony-box/config.env
 
-# Until the boot config file lands (syncphony.txt -> config.env), the server
-# URL is a one-line file written on the box itself. Anything that isn't an
-# http(s) URL falls back to the local "not set up" page.
-URL=""
-if [ -r "${URL_FILE}" ]; then
-	URL="$(tr -d ' \t\r\n' < "${URL_FILE}")"
+# syncphony-box-config.service turns /boot/firmware/syncphony.txt (edited
+# from any computer) into config.env before this wrapper starts. Anything
+# that isn't an http(s) URL — no file, no server_url, or an invalid one —
+# falls back to the local "not set up" page, which says where to set it.
+SERVER_URL=''
+if [ -r "${CONFIG_FILE}" ]; then
+	. "${CONFIG_FILE}"
 fi
 
-case "${URL}" in
+case "${SERVER_URL}" in
 	http://*|https://*)
-		URL="${URL%/}"
+		URL="${SERVER_URL%/}"
 		URL="${URL%/tv}/tv"
 		;;
 	*)

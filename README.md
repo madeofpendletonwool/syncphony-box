@@ -35,14 +35,18 @@ The result lands in `deploy/`:
 
 `make clean` removes build output and the leftover pi-gen build container.
 
+`make test` runs the bats unit tests (`tests/`) for the box scripts — no
+hardware or image build needed; install bats first (`apt install bats`).
+CI runs them on every PR and push.
+
 ### Continuous integration
 
 GitHub Actions builds the image natively on arm64 runners
 (`ubuntu-24.04-arm`) on every push to `main` and on every PR, runs the
-no-hardware smoke test (`scripts/smoke-test.sh` loop-mounts the built image
-and checks packages, enabled units, the locked first user, the first-boot
-seed files, and the kiosk session), and uploads the image as a workflow
-artifact.
+bats tests, runs the no-hardware smoke test (`scripts/smoke-test.sh`
+loop-mounts the built image and checks packages, enabled units, the locked
+first user, the first-boot seed files, the kiosk session, and the boot
+config file), and uploads the image as a workflow artifact.
 
 ## The kiosk session
 
@@ -57,15 +61,32 @@ Every Chromium flag lives in one wrapper, `/usr/lib/syncphony-box/kiosk`,
 on the box — including the GPU flags that let Chromium use the Pi's GPU.
 The browser opens the server's `/tv` page.
 
-Until the boot config file (`syncphony.txt`) lands, the server URL comes
-from `/etc/syncphony-box/url` on the box (one line, e.g.
-`https://syncphony.example.com`). Without it the box shows a local "no
-server set" page:
+## Configuration: syncphony.txt
 
-```sh
-echo https://syncphony.example.com | sudo tee /etc/syncphony-box/url
-sudo systemctl restart syncphony-kiosk
-```
+The box is configured by a file you can edit from any computer. Turn the
+box off, put the SD card in a card reader, and open `syncphony.txt` on the
+card's boot partition (the small drive, labeled `bootfs`; on the box it is
+`/boot/firmware/syncphony.txt`). Remove the leading `# ` from the options
+you want, save, put the card back, and power the box on. CRLF line endings
+and a BOM are fine — Notepad works. A missing or invalid file never stops
+the box from booting; bad values are logged and fall back to defaults.
+
+| option | values | default | what it does |
+|---|---|---|---|
+| `server_url` | `https://…` | unset | the Syncphony server this box shows |
+| `name` | any text | unset | name in the room's Screens list; also the hostname (`Living room TV` → `living-room-tv`, advertised as `living-room-tv.local`) |
+| `audio` | `hdmi`, `hdmi2`, `analog`, `usb` | `hdmi` | where the sound goes |
+| `resolution` | e.g. `1920x1080@60` | auto | forces the HDMI mode (takes a reboot; the box reboots once on its own) |
+| `rotate` | `0`, `90`, `180`, `270` | `0` | rotates the screen (takes a reboot) |
+| `cec` | `on`, `off` | `on` | switch the TV's input when music starts |
+
+On every boot, `syncphony-box-config.service` parses the file into
+`/etc/syncphony-box/config.env` before the kiosk starts; `resolution` and
+`rotate` also become a `video=HDMI-A-1:…D` kernel argument (the `D` forces
+the output on, so a TV that's off at boot still gets a picture later).
+
+Without a valid `server_url` the box shows a local page saying where to
+set it — so set `server_url` first thing, then pair from your phone.
 
 ### On-Pi checklist
 
@@ -78,6 +99,12 @@ CI can't boot a Pi; verify these on hardware when one is at hand:
 - No crash bubble, and no "restore pages" prompt after pulling power.
 - The `/tv` visualizer runs smoothly with GPU rasterization (check
   `chrome://gpu` on the box); if not, tune the GPU flags in the wrapper.
+- Edit `syncphony.txt` on a laptop (Notepad is fine), boot, and the server
+  URL, hostname, audio output and resolution all changed.
+- The box answers at `<hostname>.local`; no valid `server_url` still boots
+  to the "no server set" page; an empty or garbage file boots to defaults.
+- A TV that's off at boot gets a picture when turned on later (`D` on the
+  video= token), and `rotate=90` really rotates.
 
 
 ## Flashing
@@ -97,8 +124,9 @@ pi-gen/               pi-gen submodule (pinned, never edited)
 stage-syncphony/      custom pi-gen stage (packages, kiosk session, ...)
 config                pi-gen build configuration
 build.sh              wraps pi-gen's build-docker.sh
-Makefile              make image / make clean
+Makefile              make image / make clean / make test
 scripts/smoke-test.sh no-hardware image checks (used by CI)
+tests/                bats unit tests for the box scripts (used by CI)
 docs/adr/             architecture decision records
 ```
 

@@ -1,0 +1,20 @@
+# Syncphony Box settings.
+#
+# This file sits on the SD card's boot partition, so you can edit it with
+# any computer: put the card in a card reader and open the small "bootfs"
+# drive. Lines are name=value; remove the leading "# " to turn an option
+# on, put the card back, and power the box on. Plain text only; CRLF line
+# endings are fine. Unknown lines are ignored.
+#
+# The Syncphony server this box shows. Required.
+#server_url=https://syncphony.example.com
+# The box's name in the room's Screens list (also the hostname, slugified).
+#name=Living room TV
+# Where the sound goes: hdmi (default), hdmi2, analog, usb.
+#audio=hdmi
+# Force a mode if the TV reports a bad one: e.g. 1920x1080@60. Empty = auto.
+#resolution=
+# Rotate the screen: 0, 90, 180, 270.
+#rotate=0
+# Switch the TV to this input when music starts (HDMI-CEC): on/off.
+#cec=on

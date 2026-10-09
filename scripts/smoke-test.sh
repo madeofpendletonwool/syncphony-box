@@ -7,7 +7,8 @@
 # are installed, the cloud-init first-boot machinery (which applies Raspberry
 # Pi Imager settings) is enabled, the first user is locked, the NoCloud
 # seed files are present on the boot partition, the kiosk session is in
-# place (user, unit, wrapper, boot tuning).
+# place (user, unit, wrapper, boot tuning), and the boot config file
+# (syncphony.txt) ships on the boot partition fully commented out.
 #
 # Later issues extend this test as the image grows (boxd, /data, ...).
 
@@ -52,7 +53,7 @@ sudo mount -o ro "${LOOP}p1" "${WORK}/boot"
 sudo mount -o ro "${LOOP}p2" "${WORK}/root"
 
 # --- packages ---------------------------------------------------------------
-for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init; do
+for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi-daemon; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -68,7 +69,7 @@ for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init; do
 done
 
 # --- units ------------------------------------------------------------------
-for unit in cloud-config.service cloud-final.service syncphony-kiosk.service; do
+for unit in cloud-config.service cloud-final.service syncphony-kiosk.service syncphony-box-config.service avahi-daemon.service; do
 	state="$(systemctl --root="${WORK}/root" is-enabled "${unit}" 2>/dev/null || true)"
 	if [ "${state}" = "enabled" ]; then
 		check "unit ${unit} enabled" ok
@@ -110,6 +111,41 @@ if sudo test -f "${WORK}/root/usr/lib/syncphony-box/unconfigured.html"; then
 else
 	check "unconfigured fallback page installed" "missing"
 fi
+
+# --- boot config (syncphony.txt) --------------------------------------------
+if sudo test -x "${WORK}/root/usr/lib/syncphony-box/syncphony-box-config"; then
+	check "config parser installed executable" ok
+else
+	check "config parser installed executable" "missing or not executable"
+fi
+
+if sudo grep -q 'config.env' "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
+	check "kiosk wrapper reads config.env" ok
+else
+	check "kiosk wrapper reads config.env" "no reference found"
+fi
+
+if [ -f "${WORK}/boot/syncphony.txt" ]; then
+	check "boot partition has syncphony.txt" ok
+else
+	check "boot partition has syncphony.txt" "missing"
+fi
+
+# The file must ship fully commented out: every non-comment line is empty.
+active="$(sudo grep -Ev '^[[:space:]]*(#|$)' "${WORK}/boot/syncphony.txt" 2>/dev/null || true)"
+if [ -z "${active}" ]; then
+	check "syncphony.txt ships fully commented out" ok
+else
+	check "syncphony.txt ships fully commented out" "active lines: ${active}"
+fi
+
+for key in server_url name audio resolution rotate cec; do
+	if sudo grep -q "^#${key}=" "${WORK}/boot/syncphony.txt"; then
+		check "syncphony.txt documents ${key}" ok
+	else
+		check "syncphony.txt documents ${key}" "no commented ${key}= line"
+	fi
+done
 
 # --- boot presentation ------------------------------------------------------
 CMDLINE=" $(sudo cat "${WORK}/boot/cmdline.txt") "

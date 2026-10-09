@@ -4,3 +4,5 @@
 cage
 chromium
 fonts-noto-color-emoji
+# mDNS: the box advertises <hostname>.local (set from name= in syncphony.txt).
+avahi-daemon

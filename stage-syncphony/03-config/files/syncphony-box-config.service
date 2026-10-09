@@ -1,0 +1,15 @@
+[Unit]
+Description=Apply the Syncphony box boot config (syncphony.txt)
+Documentation=file:/usr/lib/syncphony-box/syncphony.txt
+RequiresMountsFor=/boot/firmware
+After=local-fs.target
+# Set the hostname (from name=) before avahi advertises it and before the
+# kiosk reads config.env; a failed run still lets both start.
+Before=avahi-daemon.service systemd-avahi-daemon.socket syncphony-kiosk.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/syncphony-box/syncphony-box-config apply
+
+[Install]
+WantedBy=multi-user.target

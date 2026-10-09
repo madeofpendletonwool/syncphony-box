@@ -49,6 +49,11 @@ wrapper if needed.
 
 ### What the browser opens
 
+*(The URL source below was superseded by the boot config file: the wrapper
+now reads `SERVER_URL` from `/etc/syncphony-box/config.env`, written from
+`/boot/firmware/syncphony.txt` — see ADR 0003. The fallback page and its
+behavior are unchanged.)*
+
 Until the boot config file lands (syncphony.txt → `/etc/syncphony-box/config.env`,
 MAD-800) the server URL is read from `/etc/syncphony-box/url` (one line,
 the server origin; a trailing `/tv` is tolerated and normalized away).
