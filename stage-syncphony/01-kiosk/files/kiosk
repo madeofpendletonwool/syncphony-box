@@ -1,0 +1,53 @@
+#!/bin/sh
+# Chromium launcher for the Syncphony box kiosk session.
+#
+# Every Chromium flag lives here so later issues (boxd, GPU tuning, the
+# /data profile move) change them in exactly one place.
+
+set -eu
+
+DATA_DIR=/var/lib/syncphony-box/chromium
+URL_FILE=/etc/syncphony-box/url
+
+# Until the boot config file lands (syncphony.txt -> config.env), the server
+# URL is a one-line file written on the box itself. Anything that isn't an
+# http(s) URL falls back to the local "not set up" page.
+URL=""
+if [ -r "${URL_FILE}" ]; then
+	URL="$(tr -d ' \t\r\n' < "${URL_FILE}")"
+fi
+
+case "${URL}" in
+	http://*|https://*)
+		URL="${URL%/}"
+		URL="${URL%/tv}/tv"
+		;;
+	*)
+		URL="file:///usr/lib/syncphony-box/unconfigured.html"
+		;;
+esac
+
+mkdir -p "${DATA_DIR}"
+
+# GPU flags: the Pi's vc4/v3d GPU is on Chromium's software-rendering
+# blocklist; these turn GPU rasterization on so /tv's visualizer composites
+# on the GPU. Hardware verification status: docs/adr/0002-kiosk-session.md.
+exec /usr/bin/chromium \
+	--kiosk \
+	--noerrdialogs \
+	--disable-infobars \
+	--disable-session-crashed-bubble \
+	--disable-features=Translate,MediaRouter \
+	--autoplay-policy=no-user-gesture-required \
+	--check-for-update-interval=31536000 \
+	--password-store=basic \
+	--no-first-run \
+	--start-maximized \
+	--user-data-dir="${DATA_DIR}" \
+	--ozone-platform=wayland \
+	--enable-features=OverlayScrollbar \
+	--ignore-gpu-blocklist \
+	--enable-gpu-rasterization \
+	--enable-native-gpu-memory-buffers \
+	--enable-zero-copy \
+	"${URL}"

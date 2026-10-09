@@ -5,10 +5,11 @@
 #
 # Loop-mounts the image's two partitions and checks that the kiosk packages
 # are installed, the cloud-init first-boot machinery (which applies Raspberry
-# Pi Imager settings) is enabled, the first user is locked, and the NoCloud
-# seed files are present on the boot partition.
+# Pi Imager settings) is enabled, the first user is locked, the NoCloud
+# seed files are present on the boot partition, the kiosk session is in
+# place (user, unit, wrapper, boot tuning).
 #
-# Later issues extend this test as the image grows (kiosk units, boxd, ...).
+# Later issues extend this test as the image grows (boxd, /data, ...).
 
 set -euo pipefail
 
@@ -51,7 +52,7 @@ sudo mount -o ro "${LOOP}p1" "${WORK}/boot"
 sudo mount -o ro "${LOOP}p2" "${WORK}/root"
 
 # --- packages ---------------------------------------------------------------
-for pkg in cage chromium fonts-noto-color-emoji cloud-init; do
+for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -67,7 +68,7 @@ for pkg in cage chromium fonts-noto-color-emoji cloud-init; do
 done
 
 # --- units ------------------------------------------------------------------
-for unit in cloud-config.service cloud-final.service; do
+for unit in cloud-config.service cloud-final.service syncphony-kiosk.service; do
 	state="$(systemctl --root="${WORK}/root" is-enabled "${unit}" 2>/dev/null || true)"
 	if [ "${state}" = "enabled" ]; then
 		check "unit ${unit} enabled" ok
@@ -75,6 +76,56 @@ for unit in cloud-config.service cloud-final.service; do
 		check "unit ${unit} enabled" "${state:-not-found}"
 	fi
 done
+
+# --- kiosk session ----------------------------------------------------------
+if sudo grep -q '^kiosk:' "${WORK}/root/etc/passwd"; then
+	check "kiosk user exists" ok
+else
+	check "kiosk user exists" "missing"
+fi
+
+kiosk_shadow="$(sudo sed -n 's/^kiosk:\([^:]*\):.*/\1/p' "${WORK}/root/etc/shadow")"
+case "${kiosk_shadow}" in
+	'*'|'!'|'!*') check "kiosk user password locked" ok ;;
+	'') check "kiosk user password locked" "no shadow entry" ;;
+	*) check "kiosk user password locked" "password field: ${kiosk_shadow}" ;;
+esac
+
+for grp in video render audio input; do
+	if sudo grep -E "^${grp}:" "${WORK}/root/etc/group" | grep -q kiosk; then
+		check "kiosk user in ${grp} group" ok
+	else
+		check "kiosk user in ${grp} group" "not a member"
+	fi
+done
+
+if sudo test -x "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
+	check "kiosk wrapper installed executable" ok
+else
+	check "kiosk wrapper installed executable" "missing or not executable"
+fi
+
+if sudo test -f "${WORK}/root/usr/lib/syncphony-box/unconfigured.html"; then
+	check "unconfigured fallback page installed" ok
+else
+	check "unconfigured fallback page installed" "missing"
+fi
+
+# --- boot presentation ------------------------------------------------------
+CMDLINE=" $(sudo cat "${WORK}/boot/cmdline.txt") "
+for param in quiet splash loglevel=3 vt.global_cursor_default=0 consoleblank=0; do
+	if [ "${CMDLINE}" != "${CMDLINE/ ${param} /}" ]; then
+		check "cmdline has ${param}" ok
+	else
+		check "cmdline has ${param}" "missing"
+	fi
+done
+
+if sudo grep -q '^disable_splash=1' "${WORK}/boot/config.txt"; then
+	check "config.txt has disable_splash=1" ok
+else
+	check "config.txt has disable_splash=1" "missing"
+fi
 
 # --- first user is locked (no password until Imager settings apply) ---------
 if sudo grep -q '^syncphony:!' "${WORK}/root/etc/shadow"; then

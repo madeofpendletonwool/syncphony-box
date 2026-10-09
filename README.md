@@ -40,8 +40,45 @@ The result lands in `deploy/`:
 GitHub Actions builds the image natively on arm64 runners
 (`ubuntu-24.04-arm`) on every push to `main` and on every PR, runs the
 no-hardware smoke test (`scripts/smoke-test.sh` loop-mounts the built image
-and checks packages, enabled units, the locked first user, and the first-boot
-seed files), and uploads the image as a workflow artifact.
+and checks packages, enabled units, the locked first user, the first-boot
+seed files, and the kiosk session), and uploads the image as a workflow
+artifact.
+
+## The kiosk session
+
+On boot the box starts `syncphony-kiosk.service`: the unprivileged `kiosk`
+user runs [cage](https://github.com/cage-kiosk/cage) (a Wayland kiosk
+compositor) on tty1, and cage runs Chromium fullscreen. There is no desktop
+and no login. If Chromium is killed, the unit restarts it after 2 seconds.
+The boot is silent (`quiet loglevel=3`, no rainbow splash, no console
+cursor, no console blanking). See [docs/adr/0002-kiosk-session.md](docs/adr/0002-kiosk-session.md).
+
+Every Chromium flag lives in one wrapper, `/usr/lib/syncphony-box/kiosk`,
+on the box — including the GPU flags that let Chromium use the Pi's GPU.
+The browser opens the server's `/tv` page.
+
+Until the boot config file (`syncphony.txt`) lands, the server URL comes
+from `/etc/syncphony-box/url` on the box (one line, e.g.
+`https://syncphony.example.com`). Without it the box shows a local "no
+server set" page:
+
+```sh
+echo https://syncphony.example.com | sudo tee /etc/syncphony-box/url
+sudo systemctl restart syncphony-kiosk
+```
+
+### On-Pi checklist
+
+CI can't boot a Pi; verify these on hardware when one is at hand:
+
+- Boots to the server's `/tv` fullscreen in under ~30 s on a Pi 5.
+- `sudo systemctl kill --kill-who=all syncphony-kiosk` (or killing
+  Chromium) brings the session back within a few seconds.
+- No visible cursor — including with a mouse plugged in and wiggled.
+- No crash bubble, and no "restore pages" prompt after pulling power.
+- The `/tv` visualizer runs smoothly with GPU rasterization (check
+  `chrome://gpu` on the box); if not, tune the GPU flags in the wrapper.
+
 
 ## Flashing
 

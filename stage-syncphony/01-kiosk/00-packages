@@ -1,0 +1,4 @@
+# Explicit DRI drivers so the vc4/v3d GPU is usable by cage and Chromium
+# (pulls in the Mesa drivers even if a future chromium dependency change
+# would not).
+libgl1-mesa-dri

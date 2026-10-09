@@ -1,0 +1,20 @@
+[Unit]
+Description=Syncphony kiosk session (cage + Chromium)
+Conflicts=getty@tty1.service
+After=systemd-user-sessions.service getty@tty1.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=kiosk
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+UtmpIdentifier=tty1
+StandardInput=tty
+ExecStart=/usr/bin/cage -- /usr/lib/syncphony-box/kiosk
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
