@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    # Native arm64 runner: pi-gen builds the arm64 rootfs natively instead of
+    # through QEMU emulation.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Build image
+        run: make image
+
+      - name: Smoke test
+        run: scripts/smoke-test.sh deploy/syncphony-box-*-arm64.img.xz
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: syncphony-box-image-${{ github.sha }}
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            deploy/*.img.xz
+            deploy/*.img.xz.sha256
+            deploy/*.info

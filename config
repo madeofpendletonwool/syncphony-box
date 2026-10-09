@@ -1,0 +1,30 @@
+# pi-gen configuration for the Syncphony box image.
+#
+# Sourced by pi-gen's build.sh (via our ./build.sh wrapper, which appends the
+# image naming on top of this file). See pi-gen/README.md for the full list.
+
+IMG_NAME="syncphony-box"
+
+# Raspberry Pi OS Lite (stage0-stage2) plus the custom Syncphony stage that
+# lives outside the pi-gen submodule. Paths are relative to pi-gen/.
+STAGE_LIST="stage0 stage1 stage2 ../stage-syncphony"
+
+# Export only from stage-syncphony (its EXPORT_IMAGE sets an empty IMG_SUFFIX).
+# stage2's own EXPORT_IMAGE is neutralized with a SKIP_IMAGES file; see
+# ./build.sh and docs/adr/0001-pi-gen-kiosk.md.
+DEPLOY_COMPRESSION="xz"
+
+LOCALE_DEFAULT="en_US.UTF-8"
+KEYBOARD_KEYMAP="us"
+KEYBOARD_LAYOUT="English (US)"
+TIMEZONE_DEFAULT="UTC"
+
+TARGET_HOSTNAME="syncphony-box"
+
+# The first user is created with a locked password and no usable login
+# (pi-gen's `adduser --disabled-login`). FIRST_USER_PASS is deliberately left
+# unset: there is no default password to leak. Raspberry Pi Imager settings are
+# applied on first boot by cloud-init (NoCloud seed in /boot/firmware), which
+# renames this user and sets the real password. Keep ENABLE_CLOUD_INIT=1.
+FIRST_USER_NAME="syncphony"
+ENABLE_CLOUD_INIT=1

@@ -1,0 +1,6 @@
+# Kiosk stack for the Syncphony box. The session itself (cage + Chromium
+# wrapper, syncphony-kiosk.service) is assembled on top of this in later
+# changes; these are the packages it will need.
+cage
+chromium
+fonts-noto-color-emoji
