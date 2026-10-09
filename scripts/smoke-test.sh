@@ -69,7 +69,11 @@ done
 # --- units ------------------------------------------------------------------
 for unit in cloud-config.service cloud-final.service; do
 	state="$(systemctl --root="${WORK}/root" is-enabled "${unit}" 2>/dev/null || true)"
-	check "unit ${unit} enabled" "${state:-not-found}"
+	if [ "${state}" = "enabled" ]; then
+		check "unit ${unit} enabled" ok
+	else
+		check "unit ${unit} enabled" "${state:-not-found}"
+	fi
 done
 
 # --- first user is locked (no password until Imager settings apply) ---------
