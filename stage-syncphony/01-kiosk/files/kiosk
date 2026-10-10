@@ -1,32 +1,46 @@
 #!/bin/sh
 # Chromium launcher for the Syncphony box kiosk session.
 #
-# Every Chromium flag lives here so later issues (boxd, GPU tuning, the
-# /data profile move) change them in exactly one place.
+# Every Chromium flag lives here so later issues (GPU tuning, the /data
+# profile move) change them in exactly one place.
+#
+# The URL never goes straight at the server: the kiosk enters through
+# boxd's local pages (http://127.0.0.1:8099), so the box shows its own
+# setup screen when no server is set and its own offline screen when the
+# server can't be reached — never Chromium's error page. When boxd itself
+# is down, fall back to the server URL directly (or a static page).
 
 set -eu
 
 DATA_DIR=/var/lib/syncphony-box/chromium
 CONFIG_FILE=/etc/syncphony-box/config.env
+BOXD_BIN=/usr/lib/syncphony-box/boxd
+BOXD_URL=http://127.0.0.1:8099
 
-# syncphony-box-config.service turns /boot/firmware/syncphony.txt (edited
-# from any computer) into config.env before this wrapper starts. Anything
-# that isn't an http(s) URL — no file, no server_url, or an invalid one —
-# falls back to the local "not set up" page, which says where to set it.
+# syncphony-box-config.service (boxd config apply) turns
+# /boot/firmware/syncphony.txt (edited from any computer) into config.env
+# before this wrapper starts.
 SERVER_URL=''
 if [ -r "${CONFIG_FILE}" ]; then
 	. "${CONFIG_FILE}"
 fi
 
-case "${SERVER_URL}" in
-	http://*|https://*)
-		URL="${SERVER_URL%/}"
-		URL="${URL%/tv}/tv"
-		;;
-	*)
+URL=''
+if curl -fsS -m 2 "${BOXD_URL}/healthz" >/dev/null 2>&1; then
+	# boxd is up. Its start page checks the server's /healthz before
+	# navigating (and shows the offline screen until it answers); its
+	# setup page shows the QR when no server is configured.
+	case "${SERVER_URL}" in
+		http://*|https://*) URL="${BOXD_URL}/start" ;;
+		*) URL="${BOXD_URL}/setup" ;;
+	esac
+else
+	# boxd is down: ask the binary for the /tv target (it encodes the box
+	# version and name properly); without a server, the static page.
+	if ! URL=$("${BOXD_BIN}" url 2>/dev/null) || [ -z "${URL}" ]; then
 		URL="file:///usr/lib/syncphony-box/unconfigured.html"
-		;;
-esac
+	fi
+fi
 
 mkdir -p "${DATA_DIR}"
 

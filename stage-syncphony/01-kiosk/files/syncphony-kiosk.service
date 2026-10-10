@@ -1,8 +1,8 @@
 [Unit]
 Description=Syncphony kiosk session (cage + Chromium)
 Conflicts=getty@tty1.service
-After=systemd-user-sessions.service getty@tty1.service network-online.target syncphony-audio.service
-Wants=network-online.target syncphony-audio.service
+After=systemd-user-sessions.service getty@tty1.service network-online.target syncphony-audio.service boxd.service
+Wants=network-online.target syncphony-audio.service boxd.service
 
 [Service]
 User=kiosk

@@ -14,23 +14,32 @@ concurrency:
 
 jobs:
   tests:
-    # Fast unit tests (bats) for the box scripts; no image build needed.
+    # Unit tests for the box scripts (bats) and boxd (go), no image build
+    # needed. The bats suite pins the syncphony.txt behavior against a
+    # host-arch boxd binary built here.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: boxd/go.mod
 
       - name: Install bats
         run: |
           sudo apt-get update
           sudo apt-get install -y bats
 
+      - name: Lint
+        run: make lint
+
       - name: Run tests
-        run: bats tests/
+        run: make test
 
   image:
     # Native arm64 runner: pi-gen builds the arm64 rootfs natively instead of
-    # through QEMU emulation.
+    # through QEMU emulation, and boxd builds natively too.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
@@ -38,6 +47,10 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: boxd/go.mod
 
       - name: Build image
         run: make image
@@ -54,4 +67,4 @@ jobs:
           path: |
             deploy/*.img.xz
             deploy/*.img.xz.sha256
-            deploy/*.info
+            deploy/*.img.info

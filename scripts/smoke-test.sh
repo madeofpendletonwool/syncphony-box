@@ -8,9 +8,10 @@
 # Pi Imager settings) is enabled, the first user is locked, the NoCloud
 # seed files are present on the boot partition, the kiosk session is in
 # place (user, unit, wrapper, boot tuning), the boot config file
-# (syncphony.txt) ships on the boot partition fully commented out, and the
+# (syncphony.txt) ships on the boot partition fully commented out, the
 # audio stack is in place (PipeWire user services for the kiosk user with
-# linger, the sink-selection units, the WirePlumber tuning).
+# linger, the sink-selection units, the WirePlumber tuning), and boxd (the
+# Go helper daemon) is installed with its units enabled.
 #
 # Later issues extend this test as the image grows (boxd, /data, ...).
 
@@ -73,7 +74,7 @@ done
 
 # --- units ------------------------------------------------------------------
 for unit in cloud-config.service cloud-final.service syncphony-kiosk.service syncphony-box-config.service \
-	avahi-daemon.service syncphony-audio.service syncphony-audio-monitor.service; do
+	avahi-daemon.service syncphony-audio.service syncphony-audio-monitor.service boxd.service; do
 	state="$(systemctl --root="${WORK}/root" is-enabled "${unit}" 2>/dev/null || true)"
 	if [ "${state}" = "enabled" ]; then
 		check "unit ${unit} enabled" ok
@@ -117,16 +118,55 @@ else
 fi
 
 # --- boot config (syncphony.txt) --------------------------------------------
-if sudo test -x "${WORK}/root/usr/lib/syncphony-box/syncphony-box-config"; then
-	check "config parser installed executable" ok
-else
-	check "config parser installed executable" "missing or not executable"
-fi
-
 if sudo grep -q 'config.env' "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
 	check "kiosk wrapper reads config.env" ok
 else
 	check "kiosk wrapper reads config.env" "no reference found"
+fi
+
+# --- boxd (the Go helper daemon) ----------------------------------------------
+if sudo test -x "${WORK}/root/usr/lib/syncphony-box/boxd"; then
+	check "boxd installed executable" ok
+else
+	check "boxd installed executable" "missing or not executable"
+fi
+
+# Static (CGO_ENABLED=0) arm64 binary — only verifiable where `file` runs
+# on it, i.e. on the arm64 CI runner.
+if ! command -v file >/dev/null 2>&1; then
+	check "boxd is a static binary" ok
+elif file "${WORK}/root/usr/lib/syncphony-box/boxd" 2>/dev/null |
+	grep -q 'ELF 64-bit LSB.*ARM aarch64.*statically linked'; then
+	check "boxd is a static binary" ok
+else
+	check "boxd is a static binary" "$(file "${WORK}/root/usr/lib/syncphony-box/boxd" 2>/dev/null)"
+fi
+
+if sudo grep -q '^ExecStart=/usr/lib/syncphony-box/boxd serve$' \
+	"${WORK}/root/etc/systemd/system/boxd.service"; then
+	check "boxd.service runs boxd serve" ok
+else
+	check "boxd.service runs boxd serve" "ExecStart mismatch"
+fi
+
+# The boot config apply is boxd now: same unit, new engine.
+if sudo grep -q '^ExecStart=/usr/lib/syncphony-box/boxd config apply$' \
+	"${WORK}/root/etc/systemd/system/syncphony-box-config.service"; then
+	check "config apply runs boxd" ok
+else
+	check "config apply runs boxd" "ExecStart mismatch"
+fi
+
+if sudo grep -q '127.0.0.1:8099' "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
+	check "kiosk wrapper enters through boxd" ok
+else
+	check "kiosk wrapper enters through boxd" "no boxd URL in the wrapper"
+fi
+
+if sudo grep -q 'boxd.service' "${WORK}/root/etc/systemd/system/syncphony-kiosk.service"; then
+	check "kiosk unit waits for boxd" ok
+else
+	check "kiosk unit waits for boxd" "no boxd reference"
 fi
 
 if [ -f "${WORK}/boot/syncphony.txt" ]; then

@@ -9,7 +9,7 @@ Before=avahi-daemon.service systemd-avahi-daemon.socket syncphony-kiosk.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/lib/syncphony-box/syncphony-box-config apply
+ExecStart=/usr/lib/syncphony-box/boxd config apply
 
 [Install]
 WantedBy=multi-user.target

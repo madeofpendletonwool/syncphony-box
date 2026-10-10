@@ -1,10 +1,14 @@
-# Tests for the boot config parser/applier installed from
-# stage-syncphony/03-config/files/syncphony-box-config. The tests run the
-# script straight from the repo so CI covers the parsing without building
-# the image; the CI smoke test covers the install inside the image.
+# Tests for the boot config parsing/applying in boxd (boxd config parse /
+# boxd config apply; the stage-1 spellings `boxd parse` / `boxd apply` also
+# work, which is what these tests use). They pin the exact behavior the
+# stage-1 shell script had — the same warnings, the same config.env output,
+# the same apply semantics — so boxd's takeover changed none of it. The
+# tests run a host-arch boxd built from the repo (make test builds it into
+# .build/boxd; BOXD_BIN overrides), so CI covers the parsing without
+# building the image; the CI smoke test covers the install inside the image.
 
 BATS_TEST_DIRNAME_ABS="$(cd "${BATS_TEST_DIRNAME}" && pwd)"
-SCRIPT="${BATS_TEST_DIRNAME_ABS}/../stage-syncphony/03-config/files/syncphony-box-config"
+SCRIPT="${BOXD_BIN:-${BATS_TEST_DIRNAME_ABS}/../.build/boxd}"
 TEMPLATE="${BATS_TEST_DIRNAME_ABS}/../stage-syncphony/03-config/files/syncphony.txt"
 
 setup() {

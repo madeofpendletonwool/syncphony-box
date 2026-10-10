@@ -1,0 +1,16 @@
+[Unit]
+Description=Syncphony box daemon (box bridge and local screens)
+Documentation=file:///usr/lib/syncphony-box/syncphony.txt
+RequiresMountsFor=/boot/firmware
+# After the boot config has been applied (config.env, hostname); before the
+# kiosk, whose start and setup screens boxd serves.
+After=syncphony-box-config.service
+Before=syncphony-kiosk.service
+
+[Service]
+ExecStart=/usr/lib/syncphony-box/boxd serve
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
