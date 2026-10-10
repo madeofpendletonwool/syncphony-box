@@ -35,18 +35,47 @@ The result lands in `deploy/`:
 
 `make clean` removes build output and the leftover pi-gen build container.
 
-`make test` runs the bats unit tests (`tests/`) for the box scripts — no
-hardware or image build needed; install bats first (`apt install bats`).
+`make test` runs the unit tests — the bats suite (`tests/`) that pins the
+`syncphony.txt` behavior against a boxd binary built from the repo, plus
+`go test` for boxd — no hardware or image build needed; install bats
+(`apt install bats`) and Go first. `make lint` checks gofmt and go vet.
 CI runs them on every PR and push.
 
 ### Continuous integration
 GitHub Actions builds the image natively on arm64 runners
 (`ubuntu-24.04-arm`) on every push to `main` and on every PR, runs the
-bats tests, runs the no-hardware smoke test (`scripts/smoke-test.sh`
+bats and Go tests, runs the no-hardware smoke test (`scripts/smoke-test.sh`
 loop-mounts the built image and checks packages, enabled units, the locked
 first user, the first-boot seed files, the kiosk session, the boot
-config file, and the audio stack), and uploads the image as a workflow
+config file, the audio stack, and boxd), and uploads the image as a workflow
 artifact.
+
+## boxd
+
+`boxd` is the box's helper daemon — a small static Go program that owns
+everything that isn't Chromium ([ADR 0005](docs/adr/0005-boxd.md)). It
+parses `syncphony.txt` on every boot, serves the box bridge on
+`http://127.0.0.1:8099` for the `/tv` page (Syncphony
+[ADR 0016](https://github.com/madeofpendletonwool/Syncphony/blob/main/docs/adr/0016-syncphony-box.md)),
+and serves the box's own screens:
+
+- **Setup.** With no `server_url` set, the TV shows a big QR code. Scan it
+  with a phone on the same network (or open `http://<box>.local`), type
+  your Syncphony server's address, and Save — boxd checks the server's
+  `/healthz`, writes it to `syncphony.txt` (still the single source of
+  truth), and restarts the kiosk into your server's pairing screen. That
+  listener is on the LAN only while the box is unconfigured (later, or for
+  10 minutes after a long OK press once the remote lands in stage 3), and
+  it never offers anything beyond the URL and the box's name.
+- **Offline.** The kiosk never navigates straight at the server: it opens a
+  local start page that checks `/healthz` first. If the server can't be
+  reached, the TV shows "Can't reach `<server>` — retrying" with the box's
+  IP and a countdown, and goes back to the room by itself once the server
+  answers — never Chromium's error page. If the server goes away while the
+  room is open, boxd notices (heartbeats keep coming while the page is
+  alive) and moves the TV to the offline screen after a couple of minutes.
+
+Logs go to journald: `journalctl -u boxd -u syncphony-kiosk`.
 
 ## The kiosk session
 
@@ -59,7 +88,8 @@ cursor, no console blanking). See [docs/adr/0002-kiosk-session.md](docs/adr/0002
 
 Every Chromium flag lives in one wrapper, `/usr/lib/syncphony-box/kiosk`,
 on the box — including the GPU flags that let Chromium use the Pi's GPU.
-The browser opens the server's `/tv` page.
+The browser enters through boxd's local pages and opens the server's `/tv`
+from there.
 
 ## Audio
 
@@ -112,13 +142,15 @@ the box from booting; bad values are logged and fall back to defaults.
 | `rotate` | `0`, `90`, `180`, `270` | `0` | rotates the screen (takes a reboot) |
 | `cec` | `on`, `off` | `on` | switch the TV's input when music starts |
 
-On every boot, `syncphony-box-config.service` parses the file into
-`/etc/syncphony-box/config.env` before the kiosk starts; `resolution` and
-`rotate` also become a `video=HDMI-A-1:…D` kernel argument (the `D` forces
-the output on, so a TV that's off at boot still gets a picture later).
+On every boot, `syncphony-box-config.service` runs `boxd config apply`:
+it parses the file into `/etc/syncphony-box/config.env` before the kiosk
+starts; `resolution` and `rotate` also become a `video=HDMI-A-1:…D` kernel
+argument (the `D` forces the output on, so a TV that's off at boot still
+gets a picture later).
 
-Without a valid `server_url` the box shows a local page saying where to
-set it — so set `server_url` first thing, then pair from your phone.
+Without a valid `server_url` the box shows its setup screen: a QR code you
+scan with a phone on the same network to set the server — no SD card
+editing needed. (Editing the card still works too.)
 
 ### On-Pi checklist
 
@@ -134,7 +166,7 @@ CI can't boot a Pi; verify these on hardware when one is at hand:
 - Edit `syncphony.txt` on a laptop (Notepad is fine), boot, and the server
   URL, hostname, audio output and resolution all changed.
 - The box answers at `<hostname>.local`; no valid `server_url` still boots
-  to the "no server set" page; an empty or garbage file boots to defaults.
+  to the setup screen (QR code); an empty or garbage file boots to defaults.
 - A TV that's off at boot gets a picture when turned on later (`D` on the
   video= token), and `rotate=90` really rotates.
 - `aplay /usr/share/sounds/alsa/Front_Center.wav` (or `pw-play` on the same
@@ -149,6 +181,12 @@ CI can't boot a Pi; verify these on hardware when one is at hand:
 - `audio=usb` with a USB DAC: the DAC is the default sink and the test tone
   plays through it after a reboot.
 - Unplug HDMI while music plays, plug it back: audio returns by itself.
+- Fresh flash, no `server_url`: the setup screen's QR appears; setting the
+  URL from a phone (the box validates it via `/healthz`) brings up `/tv`'s
+  pairing code with no SD-card editing.
+- Pull the server's network cable: the offline screen appears within a
+  couple of minutes (or at the next kiosk start) with the box's IP and a
+  countdown; plugging it back returns to the room with no touch.
 - An hour of real playback as the room's speaker — Navidrome (MP3 and
   FLAC) and Spotify (Ogg): no gaps between songs, no drift, no clipped
   first notes.
@@ -169,11 +207,12 @@ CI can't boot a Pi; verify these on hardware when one is at hand:
 ```
 pi-gen/               pi-gen submodule (pinned, never edited)
 stage-syncphony/      custom pi-gen stage (packages, kiosk session, ...)
+boxd/                 the box's Go helper daemon (bridge, config, screens)
 config                pi-gen build configuration
-build.sh              wraps pi-gen's build-docker.sh
-Makefile              make image / make clean / make test
+build.sh              wraps pi-gen's build-docker.sh (builds boxd first)
+Makefile              make image / make test / make lint / make clean
 scripts/smoke-test.sh no-hardware image checks (used by CI)
-tests/                bats unit tests for the box scripts (used by CI)
+tests/                bats tests pinning the syncphony.txt behavior (used by CI)
 docs/adr/             architecture decision records
 ```
 

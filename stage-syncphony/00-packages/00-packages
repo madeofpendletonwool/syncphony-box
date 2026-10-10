@@ -4,5 +4,10 @@
 cage
 chromium
 fonts-noto-color-emoji
-# mDNS: the box advertises <hostname>.local (set from name= in syncphony.txt).
+# mDNS: the box advertises <hostname>.local (set from name= in syncphony.txt),
+# which the setup screen's QR code points phones at.
 avahi-daemon
+# The kiosk wrapper probes boxd with curl; boxd checks the server's /healthz
+# (including over HTTPS) before the kiosk navigates.
+curl
+ca-certificates

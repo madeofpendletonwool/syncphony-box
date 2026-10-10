@@ -26,6 +26,18 @@ fi
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo unversioned)"
 IMG_BASE="syncphony-box-${VERSION}-arm64"
 
+# Build boxd (static, arm64 — Go cross-compiles) for the custom stage to
+# install. Vendored dependencies, so this needs no network.
+if ! command -v go >/dev/null 2>&1; then
+	echo "Go is required to build boxd (https://go.dev/dl/)." >&2
+	exit 1
+fi
+echo "Building boxd ${VERSION} for arm64..."
+( cd boxd &&
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=vendor -trimpath \
+		-ldflags "-s -w -X main.version=${VERSION}" \
+		-o "../stage-syncphony/05-boxd/files/boxd" ./cmd/boxd )
+
 # Only stage-syncphony/EXPORT_IMAGE (empty IMG_SUFFIX) exports an image.
 touch pi-gen/stage2/SKIP_IMAGES
 

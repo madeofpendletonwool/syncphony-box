@@ -1,2 +1,4 @@
 deploy/
 .build/
+# Built by ./build.sh into the pi-gen stage, never committed.
+stage-syncphony/05-boxd/files/boxd
