@@ -94,9 +94,7 @@ func (d *Daemon) handleSetupSave(w http.ResponseWriter, r *http.Request) {
 		d.run("systemctl", "try-restart", "avahi-daemon.service")
 	}
 	d.closeSetupWindow()
-	if err := d.run("systemctl", "restart", "syncphony-kiosk.service"); err != nil {
-		d.log.Printf("boxd: setup: kiosk restart failed: %v", err)
-	}
+	d.restartKiosk("setup saved; entering the server through the start page", false)
 
 	writePage(w, savedPageHTML(serverURL))
 }

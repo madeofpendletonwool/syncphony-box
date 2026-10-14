@@ -12,11 +12,14 @@
 # audio stack is in place (PipeWire user services for the kiosk user with
 # linger, the sink-selection units, the WirePlumber tuning), boxd (the
 # Go helper daemon) is installed with its units enabled, the pairing
-# persistence pieces agree (one profile path, crash-state prep, reset), and
-# the read-only-root layout is complete: three partitions with the third
+# persistence pieces agree (one profile path, crash-state prep, reset), the
+# read-only-root layout is complete: three partitions with the third
 # labelled syncphony-data and pre-populated, the overlay mechanism wired
 # into the initramfs and the kernel command line, every persistent path
-# pointing at /data, and the stock root-resize replaced by the data grow.
+# pointing at /data, and the stock root-resize replaced by the data grow;
+# and the self-healing pieces are wired: the systemd hardware watchdog
+# drop-in, timesyncd enabled and ordered before the kiosk, and vcgencmd
+# for boxd's thermals.
 
 set -euo pipefail
 
@@ -93,7 +96,8 @@ fi
 
 # --- packages ---------------------------------------------------------------
 for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi-daemon \
-	pipewire pipewire-bin pipewire-alsa pipewire-pulse wireplumber pulseaudio-utils alsa-utils; do
+	pipewire pipewire-bin pipewire-alsa pipewire-pulse wireplumber pulseaudio-utils alsa-utils \
+	libraspberrypi-bin systemd-timesyncd; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -112,7 +116,7 @@ done
 for unit in cloud-config.service cloud-final.service syncphony-kiosk.service syncphony-box-config.service \
 	avahi-daemon.service syncphony-audio.service syncphony-audio-monitor.service boxd.service \
 	syncphony-data-grow.service syncphony-data-prepare.service syncphony-data-save.service \
-	syncphony-data-save.timer; do
+	syncphony-data-save.timer systemd-timesyncd.service; do
 	state="$(systemctl --root="${WORK}/root" is-enabled "${unit}" 2>/dev/null || true)"
 	if [ "${state}" = "enabled" ]; then
 		check "unit ${unit} enabled" ok
@@ -244,6 +248,33 @@ if sudo grep -q '^ExecStart=/usr/lib/syncphony-box/boxd serve$' \
 	check "boxd.service runs boxd serve" ok
 else
 	check "boxd.service runs boxd serve" "ExecStart mismatch"
+fi
+
+# --- watchdogs and self-healing (MAD-806) -------------------------------------
+if sudo grep -q '^RuntimeWatchdogSec=15s' \
+	"${WORK}/root/etc/systemd/system.conf.d/50-syncphony-watchdog.conf"; then
+	check "hardware watchdog armed at 15 s" ok
+else
+	check "hardware watchdog armed at 15 s" "drop-in missing or wrong"
+fi
+
+if sudo grep -q '^RebootWatchdogSec=' \
+	"${WORK}/root/etc/systemd/system.conf.d/50-syncphony-watchdog.conf"; then
+	check "reboot watchdog bounded" ok
+else
+	check "reboot watchdog bounded" "no RebootWatchdogSec"
+fi
+
+if sudo grep -q 'time-sync.target' "${WORK}/root/etc/systemd/system/syncphony-kiosk.service"; then
+	check "kiosk unit waits for time sync" ok
+else
+	check "kiosk unit waits for time sync" "no time-sync.target ordering"
+fi
+
+if sudo test -x "${WORK}/root/usr/bin/vcgencmd"; then
+	check "vcgencmd installed (thermals)" ok
+else
+	check "vcgencmd installed (thermals)" "missing or not executable"
 fi
 
 # The boot config apply is boxd now: same unit, new engine.

@@ -12,8 +12,10 @@ import (
 // handleStatus reports everything the local screens (and tests) need.
 func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 	server := d.serverURL()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	d.mu.Lock()
+	th := d.therm
+	d.mu.Unlock()
+	status := map[string]any{
 		"configured": server != "",
 		"server":     server,
 		"reachable":  d.serverReachable(),
@@ -24,7 +26,14 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"ips":        boxIPs(),
 		"network":    networkState(),
 		"storage":    storageHealthy(),
-	})
+	}
+	if th.valid() {
+		for k, v := range th.infoFields() {
+			status[k] = v
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
 }
 
 func hostname() string {

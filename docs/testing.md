@@ -6,6 +6,90 @@ image's structure; the checks below are for real hardware. The README's
 on-Pi checklist covers the everyday list — this page is the destructive
 one.
 
+## The watchdog gauntlet (MAD-806)
+
+**Done-when for the watchdogs:** a frozen Chromium renderer brings the
+room back within about 2 minutes, and a forced kernel hang reboots the
+box, which comes back playing. Run both on a box that is paired and
+playing music.
+
+### Freeze the renderer (the boxd kiosk watchdog)
+
+```sh
+pkill -STOP -f 'type=renderer'      # freeze Chromium's renderer process
+journalctl -u boxd -f               # watch the watchdog work
+```
+
+Expected timeline: the music keeps playing for a moment (or stops), the
+page freezes on screen, and after ~90 s without a heartbeat — while the
+server still answers `/healthz` — boxd logs
+`page heartbeats stopped while the server answers` and restarts the
+kiosk. The room is back, and the speaker resumes by itself, within about
+2 minutes of the freeze. Verify the page is interactive again (queue a
+song from a phone).
+
+Repeat the freeze twice more inside 15 minutes: the third stall must
+log `...kiosk restarts within 15m0s...; rebooting` and reboot the box
+rather than restart a fourth time. After it comes back, everything plays.
+
+Also worth one pass: pull the server's network cable instead — the
+watchdog must stay quiet (it's the offline screen's job), and no restart
+loop appears in the journal.
+
+### Force a kernel hang (the hardware watchdog)
+
+```sh
+sudo sh -c 'echo 1 > /proc/sys/kernel/sysrq'   # allow the crash trigger
+sudo sh -c 'echo c > /proc/sysrq-trigger'      # panic, immediately
+```
+
+Expected: the box dies instantly (this is a real panic — nothing in
+userspace can react), the hardware watchdog hard-resets it within ~15 s
+of the hang, and it boots back into the room and resumes playing with
+no touch. This works because systemd pets `/dev/watchdog` every ~7.5 s
+(`RuntimeWatchdogSec=15s`); the panic stops the petting.
+
+Both on a Pi 4 and a Pi 5, please — the watchdog device and `sysrq`
+behave the same in theory, but this test exists to check that.
+
+### The 12-hour party soak (Chromium memory)
+
+The question: does Chromium's memory grow without bound with the
+visualizer on, on a 2 GB Pi 4? Procedure:
+
+1. Pair the box as the room's speaker and play a long queue with the
+   visualizer on, overnight (~12 h).
+2. Sample memory hourly (or read it out of the journal afterwards):
+
+   ```sh
+   ps -o pid=,rss=,args= -C chromium | sort -k2 -n | tail -3
+   ```
+
+3. Note the renderer's RSS over time.
+
+Pass: the total flattens (a sawtooth as pages reload is fine — the
+nightly reload at 05:00 only fires while idle, so a party that runs
+through the night must not be interrupted; check the journal for when
+the reload actually happened). Fail: steady growth past ~1.2 GB total,
+OOM kills in the journal (`journalctl -k | grep -i oom`), or audio
+dropouts late in the run. If it fails, the finding goes with the
+watchdog issue's follow-ups: the nightly reload is already the
+mitigation, the next step would be a more aggressive reload policy.
+
+### Thermals and time sync
+
+- `journalctl -u boxd | grep thermals` — one line per minute with
+  `temp=` and `throttled=`. During the soak above, the temperature
+  should stay under the soft limit (~80 °C on a Pi 4); a persistent
+  nonzero `throttled=` (e.g. `0x50000`, which means it *has* throttled
+  or browned out before) points at the case or the power supply.
+- `curl -s http://127.0.0.1:8099/v1/info` includes `temperatureC` and
+  the throttle fields.
+- `timedatectl` → "System clock synchronized: yes" while the kiosk is
+  up; `systemctl status systemd-timesyncd` → active. Check on both a
+  Pi 4 and a Pi 5 (the Pi 5 has an RTC header, but it has no battery by
+  default, so it still needs the network).
+
 ## The power-pull gauntlet (50 pulls)
 
 **Done-when for the read-only root (MAD-805):** 50 random power pulls —

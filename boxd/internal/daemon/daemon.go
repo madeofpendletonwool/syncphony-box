@@ -1,6 +1,8 @@
 // Package daemon is boxd's running half: the box bridge on loopback
-// (ADR 0016) and the local screens the kiosk shows when there's no server
-// to display — setup with a QR code, and the offline "can't reach" screen.
+// (ADR 0016), the local screens the kiosk shows when there's no server
+// to display — setup with a QR code, and the offline "can't reach"
+// screen — and the watchdogs and thermals that make the box heal itself
+// (MAD-806, ADR 0008).
 package daemon
 
 import (
@@ -23,16 +25,6 @@ const (
 	lanAddr      = ":80"            // the setup form, open only while unconfigured
 	setupWindow  = 10 * time.Minute // after SIGUSR1 (stage 3 wires the OK long-press)
 	healthzCache = 2 * time.Second
-
-	// The offline screen takes over when the server has been unreachable
-	// for this long while the page is alive (heartbeats fresh): the kiosk is
-	// restarted through the local start page, which shows the offline
-	// screen and returns to /tv on its own once /healthz answers. After the
-	// restart there are no heartbeats (the page is local), so this cannot
-	// loop; the cooldown is a second guard.
-	offlineGrace      = 2 * time.Minute
-	heartbeatFresh    = 90 * time.Second
-	kioskRestartGuard = 10 * time.Minute
 
 	// Pairing durability (MAD-804, ADR 0006): Chromium writes its cookie
 	// store and localStorage lazily, so the writes that make this box stay
@@ -88,25 +80,35 @@ type Daemon struct {
 	// a func field so tests can count calls instead of syncing.
 	syncDisk func() error
 
-	setupUntil   time.Time // LAN setup window open until then (zero = closed)
-	lastBeat     time.Time // last /v1/heartbeat from the page
-	lastEvent    string
-	lastEventAt  time.Time
-	lastOK       bool      // last /healthz answer
-	lastAt       time.Time // when it was checked
-	offlineSince time.Time // server unreachable continuously since
-	lastRestart  time.Time // last kiosk restart triggered by the offline watch
-	lastFlush    time.Time // last pairing-durability sync burst
+	// vcgencmd samples the hardware thermals; a func field so tests can
+	// feed readings without a Pi.
+	vcgencmd func(args ...string) (string, error)
+
+	startedAt      time.Time   // boxd start; watchdog graces count from here
+	setupUntil     time.Time   // LAN setup window open until then (zero = closed)
+	lastBeat       time.Time   // last /v1/heartbeat from the page
+	lastEvent      string      // last /v1/events type (the nightly reload waits out "playing")
+	lastEventAt    time.Time   // when it arrived
+	lastOK         bool        // last /healthz answer
+	lastAt         time.Time   // when it was checked
+	offlineSince   time.Time   // server unreachable continuously since
+	lastRestart    time.Time   // last kiosk restart boxd performed (settle window anchor)
+	restarts       []time.Time // watchdog-caused kiosk restarts inside watchdogWindow
+	lastNightlyDay string      // local day the nightly reload last ran ("2006-01-02")
+	therm          thermals    // last thermal sample (zero = none yet)
+	lastFlush      time.Time   // last pairing-durability sync burst
 }
 
 // New builds a daemon around the current syncphony.txt (the SB_* env hooks
 // from the config package apply).
 func New(version string, log *log.Logger, run config.RunCommand) *Daemon {
 	d := &Daemon{
-		version: version,
-		log:     log,
-		run:     run,
-		paths:   config.PathsFromEnv(),
+		version:   version,
+		log:       log,
+		run:       run,
+		paths:     config.PathsFromEnv(),
+		startedAt: time.Now(),
+		vcgencmd:  realVcgencmd,
 		syncDisk: func() error {
 			syscall.Sync()
 			return nil
@@ -196,6 +198,7 @@ func (d *Daemon) Run() error {
 
 	d.log.Printf("boxd: %s bridge on http://%s (server: %s)", d.version, bridgeAddr, d.serverOrNone())
 	go d.watch()
+	go d.sampleThermalsLoop()
 
 	sig := make(chan os.Signal, 4)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1, syscall.SIGUSR2)
@@ -311,42 +314,6 @@ func (d *Daemon) flushDisk(event string) {
 			}
 		}
 	}()
-}
-
-// watch is the background loop: the offline screen trigger. While the page
-// is alive (fresh heartbeats) but the server stays unreachable past the
-// grace period, restart the kiosk so it re-enters through the local start
-// page — which shows the offline screen and returns on its own.
-func (d *Daemon) watch() {
-	tick := time.NewTicker(5 * time.Second)
-	defer tick.Stop()
-	for range tick.C {
-		if !d.configured() {
-			continue
-		}
-		ok := d.serverReachable()
-		d.mu.Lock()
-		now := time.Now()
-		if ok {
-			d.offlineSince = time.Time{}
-		} else if d.offlineSince.IsZero() {
-			d.offlineSince = now
-		}
-		restart := !d.offlineSince.IsZero() &&
-			now.Sub(d.offlineSince) >= offlineGrace &&
-			!d.lastBeat.IsZero() && now.Sub(d.lastBeat) < heartbeatFresh &&
-			(d.lastRestart.IsZero() || now.Sub(d.lastRestart) > kioskRestartGuard)
-		if restart {
-			d.lastRestart = now
-		}
-		d.mu.Unlock()
-		if restart {
-			d.log.Printf("boxd: server unreachable for %s with a live page; restarting the kiosk onto the offline screen", offlineGrace)
-			if err := d.run("systemctl", "restart", "syncphony-kiosk.service"); err != nil {
-				d.log.Printf("boxd: kiosk restart failed: %v", err)
-			}
-		}
-	}
 }
 
 // storageHealthy reports whether /data — the only partition that survives
