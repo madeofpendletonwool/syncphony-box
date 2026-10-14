@@ -1,4 +1,4 @@
-.PHONY: image clean test lint
+.PHONY: image clean test lint reset
 
 image:
 	./build.sh
@@ -19,6 +19,12 @@ lint:
 	@command -v go >/dev/null 2>&1 || { echo "go is required (https://go.dev/dl/)"; exit 1; }
 	mkdir -p .build
 	cd boxd && go build -mod=vendor -o ../$@ ./cmd/boxd
+
+# Wipe a Chromium profile so the box (or a dev boxd setup) re-pairs from
+# scratch. Defaults to the box's profile path; SB_PROFILE=... points it
+# somewhere else. On a real box use: sudo syncphony-box reset
+reset: .build/boxd
+	.build/boxd profile reset
 
 clean:
 	rm -rf deploy .build

@@ -12,6 +12,7 @@ import (
 
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/config"
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/daemon"
+	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/profile"
 )
 
 // version is the box software's version, stamped in by the build
@@ -32,6 +33,8 @@ func main() {
 			configCmd(os.Args[1:])
 		case "url":
 			urlCmd()
+		case "profile":
+			profileCmd(os.Args[2:])
 		case "version", "--version", "-v":
 			fmt.Println(version)
 		case "help", "--help", "-h":
@@ -55,6 +58,9 @@ usage:
   boxd config apply      write config.env, set the hostname, sync cmdline
   boxd parse|apply       the same, stage-1 spellings
   boxd url               print the /tv URL the kiosk opens (if configured)
+  boxd profile prep [DIR]  clear Chromium's unclean-exit state before a start
+  boxd profile reset [DIR] wipe the profile; the box re-pairs from scratch
+  boxd profile path       print the profile directory (SB_PROFILE overrides)
   boxd --version         print the box software version
 `)
 }
@@ -105,4 +111,44 @@ func urlCmd() {
 		os.Exit(1)
 	}
 	fmt.Println(config.TargetURL(cfg.ServerURL, version, cfg.Name))
+}
+
+// profileCmd backs the kiosk wrapper and the reset flow (MAD-804): prep
+// runs before every Chromium start, reset wipes the pairing state, path
+// is the single source for where the profile lives.
+//
+// targetDir is the profile dir for a verb that takes one: an explicit
+// argument, else profile.Path() (the SB_PROFILE override, else
+// config.DefaultProfileDir).
+func targetDir(args []string) string {
+	if len(args) > 1 {
+		return args[1]
+	}
+	return profile.Path()
+}
+
+func profileCmd(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "boxd: profile needs a verb: prep, reset or path\n")
+		os.Exit(2)
+	}
+	var err error
+	switch args[0] {
+	case "prep":
+		err = profile.Prep(targetDir(args))
+	case "reset":
+		dir := targetDir(args)
+		if err = profile.Reset(dir); err == nil {
+			fmt.Printf("boxd: profile %s wiped; the box shows a new pairing code on the next start\n", dir)
+		}
+	case "path":
+		fmt.Println(profile.Path())
+	default:
+		fmt.Fprintf(os.Stderr, "boxd: unknown profile command %q\n", args[0])
+		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "boxd: profile %s: %v\n", args[0], err)
+		os.Exit(1)
+	}
 }

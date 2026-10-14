@@ -12,7 +12,6 @@
 
 set -eu
 
-DATA_DIR=/var/lib/syncphony-box/chromium
 CONFIG_FILE=/etc/syncphony-box/config.env
 BOXD_BIN=/usr/lib/syncphony-box/boxd
 BOXD_URL=http://127.0.0.1:8099
@@ -21,9 +20,20 @@ BOXD_URL=http://127.0.0.1:8099
 # /boot/firmware/syncphony.txt (edited from any computer) into config.env
 # before this wrapper starts.
 SERVER_URL=''
+PROFILE_DIR=''
 if [ -r "${CONFIG_FILE}" ]; then
 	. "${CONFIG_FILE}"
 fi
+
+# The Chromium profile (pairing cookie + speaker flag) lives in one place,
+# defined by boxd: config.env carries it, and boxd answers it directly when
+# config.env is missing. The literal below is only the last resort when
+# neither is available; the smoke test asserts it matches boxd's answer.
+DATA_DIR="${PROFILE_DIR:-}"
+if [ -z "${DATA_DIR}" ]; then
+	DATA_DIR="$("${BOXD_BIN}" profile path 2>/dev/null || true)"
+fi
+[ -n "${DATA_DIR}" ] || DATA_DIR=/var/lib/syncphony-box/chromium
 
 URL=''
 if curl -fsS -m 2 "${BOXD_URL}/healthz" >/dev/null 2>&1; then
@@ -43,6 +53,11 @@ else
 fi
 
 mkdir -p "${DATA_DIR}"
+
+# A power cut leaves Chromium's own "exited uncleanly" bookkeeping behind,
+# which can surface as a restore prompt. Clear it before every start —
+# best effort: a failure never blocks the kiosk.
+"${BOXD_BIN}" profile prep "${DATA_DIR}" 2>/dev/null || true
 
 # GPU flags: the Pi's vc4/v3d GPU is on Chromium's software-rendering
 # blocklist; these turn GPU rasterization on so /tv's visualizer composites

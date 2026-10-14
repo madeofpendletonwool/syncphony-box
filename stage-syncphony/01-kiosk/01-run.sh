@@ -19,6 +19,9 @@ install -v -m 0755 files/kiosk "${ROOTFS_DIR}/usr/lib/syncphony-box/kiosk"
 install -v -m 0644 files/unconfigured.html "${ROOTFS_DIR}/usr/lib/syncphony-box/unconfigured.html"
 install -v -m 0644 files/syncphony-kiosk.service "${ROOTFS_DIR}/etc/systemd/system/syncphony-kiosk.service"
 
+# The on-box admin command (sudo syncphony-box reset wipes the pairing).
+install -v -m 0755 files/syncphony-box "${ROOTFS_DIR}/usr/bin/syncphony-box"
+
 # /etc/syncphony-box/config.env (written from /boot/firmware/syncphony.txt
 # by syncphony-box-config.service) is created by 03-config.
 

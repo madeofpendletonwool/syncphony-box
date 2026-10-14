@@ -33,7 +33,23 @@ const (
 	offlineGrace      = 2 * time.Minute
 	heartbeatFresh    = 90 * time.Second
 	kioskRestartGuard = 10 * time.Minute
+
+	// Pairing durability (MAD-804, ADR 0006): Chromium writes its cookie
+	// store and localStorage lazily, so the writes that make this box stay
+	// paired sit in memory and the page cache for a while. After the
+	// pairing-critical bridge events, boxd syncs the disks in a short
+	// burst — the first pass flushes what Chromium has already committed,
+	// the later ones catch the commits it makes seconds after the event —
+	// so a power pull 10 s after pairing can't lose the cookie or the
+	// speaker flag. Playing (the speaker localStorage write happens around
+	// it) flushes too, but at most this often.
+	playingFlushEvery = 5 * time.Minute
 )
+
+// flushDelays spaces the sync() burst after a pairing-critical event: it
+// must outlast Chromium's own commit lag, and it costs nothing (an idle
+// sync on a Pi is milliseconds).
+var flushDelays = []time.Duration{0, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 
 var healthzClient = &http.Client{
 	Timeout: 4 * time.Second,
@@ -68,6 +84,10 @@ type Daemon struct {
 	run     config.RunCommand
 	paths   config.Paths
 
+	// syncDisk is the disk-flush used by the pairing-durability burst;
+	// a func field so tests can count calls instead of syncing.
+	syncDisk func() error
+
 	setupUntil   time.Time // LAN setup window open until then (zero = closed)
 	lastBeat     time.Time // last /v1/heartbeat from the page
 	lastEvent    string
@@ -76,6 +96,7 @@ type Daemon struct {
 	lastAt       time.Time // when it was checked
 	offlineSince time.Time // server unreachable continuously since
 	lastRestart  time.Time // last kiosk restart triggered by the offline watch
+	lastFlush    time.Time // last pairing-durability sync burst
 }
 
 // New builds a daemon around the current syncphony.txt (the SB_* env hooks
@@ -86,6 +107,10 @@ func New(version string, log *log.Logger, run config.RunCommand) *Daemon {
 		log:     log,
 		run:     run,
 		paths:   config.PathsFromEnv(),
+		syncDisk: func() error {
+			syscall.Sync()
+			return nil
+		},
 	}
 	d.reloadConfig()
 	return d
@@ -256,6 +281,36 @@ func checkHealthz(server string) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// flushDisk makes the pairing state durable: a sync() burst after the
+// events that write it (see flushDelays above). paired/unpaired — the
+// cookie — always flush; playing — the speaker localStorage flag around
+// playback start — flushes at most once per playingFlushEvery so a long
+// night of music doesn't sync on every song.
+func (d *Daemon) flushDisk(event string) {
+	d.mu.Lock()
+	now := time.Now()
+	if event != "paired" && event != "unpaired" {
+		if now.Sub(d.lastFlush) < playingFlushEvery {
+			d.mu.Unlock()
+			return
+		}
+	}
+	d.lastFlush = now
+	syncDisk := d.syncDisk
+	d.mu.Unlock()
+	d.log.Printf("boxd: %s event; syncing disks so the pairing survives a power cut", event)
+	go func() {
+		for _, delay := range flushDelays {
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			if err := syncDisk(); err != nil {
+				d.log.Printf("boxd: sync: %v", err)
+			}
+		}
+	}()
 }
 
 // watch is the background loop: the offline screen trigger. While the page

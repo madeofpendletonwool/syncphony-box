@@ -10,12 +10,14 @@ import (
 )
 
 // Paths resolves the SB_* test hooks: SB_TXT, SB_ENV, SB_CMDLINE override
-// the real file locations, SB_HOSTNAME_CMD and SB_REBOOT_CMD replace the
-// privileged actions, so `boxd config apply` can run on a dev machine.
+// the real file locations, SB_PROFILE the Chromium profile dir, and
+// SB_HOSTNAME_CMD / SB_REBOOT_CMD replace the privileged actions, so
+// `boxd config apply` can run on a dev machine.
 type Paths struct {
 	Txt         string
 	Env         string
 	Cmdline     string
+	ProfileDir  string // empty = DefaultProfileDir
 	HostnameCmd string // run as: sh -c "$HostnameCmd" boxd <hostname>
 	RebootCmd   string // run as: sh -c "$RebootCmd"
 }
@@ -25,6 +27,7 @@ func PathsFromEnv() Paths {
 		Txt:         envOr("SB_TXT", DefaultTxtPath),
 		Env:         envOr("SB_ENV", DefaultEnvPath),
 		Cmdline:     envOr("SB_CMDLINE", DefaultCmdlinePath),
+		ProfileDir:  os.Getenv("SB_PROFILE"),
 		HostnameCmd: os.Getenv("SB_HOSTNAME_CMD"),
 		RebootCmd:   os.Getenv("SB_REBOOT_CMD"),
 	}
@@ -52,6 +55,9 @@ func RealRunCommand(name string, args ...string) error {
 // if it changed. Every bad-config path logs and continues; it never fails.
 func Apply(p Paths, run RunCommand, log *log.Logger) {
 	cfg := ParseFile(p.Txt)
+	if p.ProfileDir != "" {
+		cfg.ProfileDir = p.ProfileDir // SB_PROFILE dev/test override
+	}
 	if err := WriteEnvFile(p.Env, cfg); err != nil {
 		log.Printf("boxd config: cannot write %s; the kiosk falls back to defaults: %v", p.Env, err)
 	}
