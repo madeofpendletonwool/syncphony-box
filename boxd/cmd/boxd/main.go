@@ -1,7 +1,8 @@
 // boxd is the Syncphony box's helper daemon (MAD-803, ADR 0005 in the box
 // repo; the browser-facing bridge contract is Syncphony ADR 0016). It owns
 // everything on the box that isn't Chromium: the syncphony.txt config, the
-// box bridge on loopback, and the local setup and offline screens.
+// box bridge on loopback, the local setup and offline screens, and the
+// kiosk watchdog and thermals (MAD-806, ADR 0008).
 package main
 
 import (

@@ -13,6 +13,10 @@ The box is **client only**: it runs no Syncphony server. Point it at yours.
 - Raspberry Pi 4 or Pi 5, 2 GB RAM or more
 - 16 GB+ SD card
 - arm64 only. Pi 3, Pi Zero 2 W and armhf are not supported.
+- A case with a heatsink or a fan. A long party with the visualizer on
+  warms a Pi in a closed case past its soft temperature limit, and the
+  firmware silently halves the CPU first (the box logs temperature and
+  throttling — see [Self-healing](#self-healing-watchdogs) below).
 
 ## Building
 
@@ -164,6 +168,42 @@ sudo syncphony-box chroot            # shell on the real root, read-write
 Reboot afterwards. Changes to the pairing, config and anything else on
 `/data` need no chroot — that partition is writable at runtime.
 
+## Self-healing: watchdogs
+
+The box notices when it's stuck and fixes itself — nobody walks over to
+it. Three watchdogs, each owning one failure class
+([ADR 0008](docs/adr/0008-watchdogs-and-self-healing.md)):
+
+- **Hardware watchdog (kernel/systemd hangs).** systemd arms the Pi's
+  hardware watchdog at 15 s. A kernel or systemd hang stops the petting
+  and the hardware hard-resets the box; with the read-only root it comes
+  back clean, paired, playing.
+- **Kiosk watchdog in boxd (a wedged page).** The `/tv` page heartbeats
+  to boxd every 30 s. If the heartbeat stops for 90 s while the server
+  still answers `/healthz`, boxd restarts the kiosk — Chromium comes
+  back and the speaker resumes by itself. If that happens 3 times in 15
+  minutes, the box reboots instead. When the server is *unreachable*,
+  the watchdog stays quiet: that's the offline screen's job, not a
+  stuck page.
+- **Time.** `systemd-timesyncd` runs and the kiosk waits for
+  `time-sync.target`: the server's playback clock sync trusts the
+  browser's clock, and a Pi has no RTC battery by default.
+
+Two hygiene loops ride along:
+
+- **Thermals.** boxd logs `vcgencmd measure_temp` and the throttling
+  flags to the journal every minute (`journalctl -u boxd | grep
+  thermals`) and reports them in `/v1/info` for the room's Screens list
+  (stage 4). A persistent `throttled=0x50000`-style value means the
+  power supply is weak; a hot `temp=` means the case needs airflow.
+- **Nightly reload.** Once a day around 05:00 local, while the page is
+  up and nothing is playing, boxd restarts the kiosk so a long-lived
+  Chromium gives its memory back. A party that runs through the night
+  is never interrupted.
+
+The freeze and kernel-hang procedures that verify all this are in
+[docs/testing.md](docs/testing.md).
+
 ## Audio
 
 The box is the room's speaker: Chromium plays everything through the
@@ -273,6 +313,21 @@ has its own page: [docs/testing.md](docs/testing.md).
 - Pull the server's network cable: the offline screen appears within a
   couple of minutes (or at the next kiosk start) with the box's IP and a
   countdown; plugging it back returns to the room with no touch.
+- Freeze Chromium's renderer (`pkill -STOP -f 'type=renderer'`): the
+  room comes back by itself within about 2 minutes (the boxd kiosk
+  watchdog), and music resumes.
+- Kernel-hang reboot (destructive; see docs/testing.md):
+  `echo c > /proc/sysrq-trigger` — the hardware watchdog resets the box
+  and it comes back paired and playing.
+- `journalctl -u boxd | grep thermals` shows a temperature line every
+  minute; `curl 127.0.0.1:8099/v1/info` includes `temperatureC`. Check
+  on a Pi 4 and a Pi 5.
+- `timedatectl` shows the clock synchronized and
+  `systemctl status systemd-timesyncd` is active, on both a Pi 4 and a
+  Pi 5 (which has an RTC header but no battery by default).
+- A 12-hour playback soak with the visualizer on, on a 2 GB Pi 4 (the
+  procedure is in docs/testing.md): memory plateaus, and the 05:00
+  nightly reload happens only while idle.
 - An hour of real playback as the room's speaker — Navidrome (MP3 and
   FLAC) and Spotify (Ogg): no gaps between songs, no drift, no clipped
   first notes.

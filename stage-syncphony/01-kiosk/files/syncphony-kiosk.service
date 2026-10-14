@@ -1,8 +1,11 @@
 [Unit]
 Description=Syncphony kiosk session (cage + Chromium)
 Conflicts=getty@tty1.service
-After=systemd-user-sessions.service getty@tty1.service network-online.target syncphony-audio.service boxd.service
-Wants=network-online.target syncphony-audio.service boxd.service
+# time-sync.target: the server's playback clock sync trusts the browser's
+# clock, and a Pi has no RTC battery by default — let systemd-timesyncd
+# give the box a sane clock before the page starts (MAD-806).
+After=systemd-user-sessions.service getty@tty1.service network-online.target syncphony-audio.service boxd.service time-sync.target
+Wants=network-online.target syncphony-audio.service boxd.service time-sync.target
 
 [Service]
 User=kiosk

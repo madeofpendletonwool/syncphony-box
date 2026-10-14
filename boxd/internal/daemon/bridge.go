@@ -109,12 +109,26 @@ func (d *Daemon) guard(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (d *Daemon) handleInfo(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	d.mu.Lock()
+	th := d.therm
+	d.mu.Unlock()
+	// The ADR 0016 core; the thermal fields (MAD-806) ride along once a
+	// sample exists — stage 4's Screens list reads them ("52 °C",
+	// "running hot / throttled"), and everyone else ignores them.
+	info := map[string]any{
 		"version":      d.version,
 		"name":         d.displayName(),
 		"capabilities": []string{"reboot", "reload"}, // cec arrives in stage 3
-	})
+	}
+	if th.valid() {
+		// No sample (no vcgencmd here) means no fields: absent reads
+		// better than a misleading 0 °C.
+		for k, v := range th.infoFields() {
+			info[k] = v
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
 }
 
 var eventTypes = map[string]bool{
@@ -181,8 +195,6 @@ func (d *Daemon) handleReload(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"ok":true}` + "\n"))
 	go func() {
 		time.Sleep(250 * time.Millisecond)
-		if err := d.run("systemctl", "restart", "syncphony-kiosk.service"); err != nil {
-			d.log.Printf("boxd: reload failed: %v", err)
-		}
+		d.restartKiosk("reload (remote care)", false)
 	}()
 }
