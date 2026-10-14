@@ -1,0 +1,99 @@
+#!/bin/sh
+# Grow the /data partition to fill the card on first boot (MAD-805,
+# ADR 0007). This is the stock Trixie resize mechanism
+# (raspberrypi-sys-mods' resize_early) retargeted: the stock script grows
+# the root partition; this box keeps root at its image size — it is
+# read-only behind an overlay — and grows the LAST partition (the data
+# one) instead. The filesystem grow follows at boot
+# (syncphony-data-grow.service, an online resize2fs).
+#
+# Stock resize_early is inert here: the build removes its `resize` token
+# from the kernel command line, so this script keys off its own token
+# (`grow-data`), which stays in the line. The grow is a no-op once the
+# partition reaches the end of the device, so the token never needs
+# removing.
+#
+# Runs in the initramfs at local-premount: the table is rewritten while
+# nothing is mounted from the card. parted and lsblk are in the initramfs
+# (the stock mechanism needs them too; the firstboot hook copies them in).
+
+set -e
+
+case "$1" in
+	prereqs)
+		exit 0
+		;;
+esac
+
+if ! grep -q ' grow-data' /proc/cmdline; then
+	exit 0
+fi
+
+get_variables () {
+	set +e # This function does not work as intended with -e
+	local_device_setup "$ROOT" "root file system"
+	set -e
+	ROOT_PART_NAME="$(lsblk -no kname "$DEV")"
+	ROOT_DEV_NAME="$(lsblk -no pkname "$DEV")"
+	ROOT_DEV="/dev/$ROOT_DEV_NAME"
+	ROOT_PART_NUM=$(cat "/sys/block/$ROOT_DEV_NAME/$ROOT_PART_NAME/partition")
+
+	# The partition to grow is the LAST one, whatever its number: find it
+	# in sysfs (the highest partition number on an MBR card image is also
+	# the last by position; the dir name is the partition's kernel name).
+	LAST_PART_NUM=0
+	for part_entry in "/sys/block/$ROOT_DEV_NAME"/*/partition; do
+		num=$(cat "$part_entry")
+		if [ "$num" -gt "$LAST_PART_NUM" ]; then
+			LAST_PART_NUM="$num"
+			LAST_PART_NAME="$(basename "$(dirname "$part_entry")")"
+		fi
+	done
+	LAST_START=$(cat "/sys/block/$ROOT_DEV_NAME/$LAST_PART_NAME/start")
+	LAST_SIZE=$(cat "/sys/block/$ROOT_DEV_NAME/$LAST_PART_NAME/size")
+
+	ROOT_DEV_SIZE=$(cat "/sys/block/$ROOT_DEV_NAME/size")
+	TARGET_END="$((ROOT_DEV_SIZE - 1))"
+	if [ "$TARGET_END" -gt 4294967295 ]; then
+		TARGET_END=4294967295
+	fi
+}
+
+do_grow () {
+	if ! parted -m "$ROOT_DEV" u s resizepart "$LAST_PART_NUM" "$TARGET_END"; then
+		return 1
+	fi
+}
+
+. /scripts/functions
+. /scripts/local
+
+log_begin_msg "Growing the data partition..."
+
+get_variables
+CURRENT_END="$((LAST_START + LAST_SIZE - 1))"
+if [ "$LAST_PART_NUM" -le "$ROOT_PART_NUM" ]; then
+	# Root IS the last partition (a card written before /data existed, or
+	# a hand-built image): growing it is exactly what we must not do.
+	log_warning_msg "Grow skipped: no partition beyond root"
+elif [ "$CURRENT_END" -ge "$TARGET_END" ]; then
+	: # already grown — the steady state after the first boot
+else
+	do_grow
+fi
+
+unset ROOT_PART_NAME
+unset ROOT_DEV_NAME
+unset ROOT_DEV
+unset ROOT_PART_NUM
+unset LAST_PART_NUM
+unset LAST_PART_NAME
+unset LAST_START
+unset LAST_SIZE
+unset ROOT_DEV_SIZE
+unset TARGET_END
+unset CURRENT_END
+
+log_end_msg
+
+exit 0

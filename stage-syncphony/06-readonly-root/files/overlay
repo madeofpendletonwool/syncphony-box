@@ -1,0 +1,90 @@
+# Local filesystem mounting			-*- shell-script -*-
+
+# The read-only overlay root for the Syncphony box (MAD-805, ADR 0007).
+#
+# This is exactly the mechanism raspi-config's "Overlay FS" option uses,
+# enabled here at build time: the initramfs /init sources
+# /scripts/<BOOT> after /scripts/local, and BOOT comes from the
+# boot=overlay token on the kernel command line — so redefining
+# local_mount_root() here replaces how the root filesystem is mounted.
+# The real root becomes the read-only lower layer; all runtime writes go
+# to a tmpfs upper and vanish on power-off. A power pull can never catch
+# the ext4 half-written.
+#
+# Syncphony additions over the raspi-config original:
+#   - the real root stays mounted read-only at /media/root-ro, so
+#     maintenance can still reach it (sudo syncphony-box chroot)
+#   - the /data partition is fsck'd and mounted here, before the real
+#     init starts, so every unit (journald, cloud-init, the kiosk) sees
+#     it. If it fsck's beyond repair the box boots without it: no
+#     pairing, no persistence, and boxd shows the storage screen.
+#   - /etc/machine-id is seeded from /data so the box keeps one identity
+#     across reboots (PID 1 binds the id before any service could
+#     restore one).
+
+. /scripts/local
+
+local_mount_root()
+{
+	local_top
+	local_device_setup "${ROOT}" "root file system"
+	ROOT="${DEV}"
+
+	# Get the root filesystem type if not set
+	if [ -z "${ROOTFSTYPE}" ]; then
+		FSTYPE=$(get_fstype "${ROOT}")
+	else
+		FSTYPE=${ROOTFSTYPE}
+	fi
+
+	local_premount
+
+	# CHANGES TO THE ORIGINAL FUNCTION BEGIN HERE
+
+	modprobe ${FSTYPE}
+	checkfs ${ROOT} root "${FSTYPE}"
+
+	# Create directories for root and the overlay
+	mkdir /lower /upper
+
+	# Mount read-only root to /lower
+	if [ "${FSTYPE}" != "unknown" ]; then
+		mount -r -t ${FSTYPE} ${ROOTFLAGS} ${ROOT} /lower
+	else
+		mount -r ${ROOTFLAGS} ${ROOT} /lower
+	fi
+
+	modprobe overlay || insmod "/lower/lib/modules/$(uname -r)/kernel/fs/overlayfs/overlay.ko"
+
+	# Mount a tmpfs for the overlay in /upper
+	mount -t tmpfs tmpfs /upper
+	mkdir /upper/data /upper/work
+
+	# Mount the final overlay-root in $rootmnt
+	mount -t overlay \
+	    -olowerdir=/lower,upperdir=/upper/data,workdir=/upper/work \
+	    overlay ${rootmnt}
+
+	# Keep the real root reachable, read-only, for maintenance.
+	mkdir -p ${rootmnt}/media/root-ro
+	mount --move /lower ${rootmnt}/media/root-ro
+
+	# /data: the one partition that persists. fsck it; mount it only when
+	# it is clean enough (e2fsck -p: 0 = clean, 1 = corrected; anything
+	# higher means a human should look at it — boot without it instead).
+	mkdir -p ${rootmnt}/data
+	fsck_rc=0
+	e2fsck -p LABEL=syncphony-data >/dev/null 2>&1 || fsck_rc=$?
+	if [ "${fsck_rc}" -le 1 ]; then
+		if mount -t ext4 LABEL=syncphony-data ${rootmnt}/data; then
+			# A stable identity across reboots: seed the overlay's
+			# /etc/machine-id from /data. data-persist save writes the
+			# bound id back on every boot, so the first boot's generated
+			# id becomes the box's permanent one.
+			if [ -f ${rootmnt}/data/system/machine-id ] &&
+				! grep -q '^uninitialized$' ${rootmnt}/data/system/machine-id; then
+				cp ${rootmnt}/data/system/machine-id ${rootmnt}/etc/machine-id
+			fi
+		fi
+	fi
+}

@@ -23,6 +23,7 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"hostname":   hostname(),
 		"ips":        boxIPs(),
 		"network":    networkState(),
+		"storage":    storageHealthy(),
 	})
 }
 
@@ -36,6 +37,12 @@ func hostname() string {
 // handleSetupScreen serves the TV setup page: a big QR code and
 // http://<hostname>.local, which the phone opens to set the server URL.
 func (d *Daemon) handleSetupScreen(w http.ResponseWriter, r *http.Request) {
+	if !storageHealthy() {
+		// Setup makes no sense without /data: the pairing would die with
+		// the overlay at the next power cut anyway. Say so instead.
+		d.handleStorageScreen(w, r)
+		return
+	}
 	if d.configured() {
 		// The kiosk only lands here before the first navigate succeeds; if
 		// the server URL is set, the start page is the right entry.
@@ -60,6 +67,10 @@ func (d *Daemon) handleSetupScreen(w http.ResponseWriter, r *http.Request) {
 // shows Chromium's error page — it shows the offline screen and returns to
 // /tv on its own once /healthz answers.
 func (d *Daemon) handleStartScreen(w http.ResponseWriter, r *http.Request) {
+	if !storageHealthy() {
+		d.handleStorageScreen(w, r)
+		return
+	}
 	if !d.configured() {
 		http.Redirect(w, r, "/setup", http.StatusFound)
 		return
@@ -71,6 +82,17 @@ func (d *Daemon) handleStartScreen(w http.ResponseWriter, r *http.Request) {
 		Network: networkState(),
 	}
 	writePage(w, startScreenHTML(st))
+}
+
+// handleStorageScreen says the quiet part out loud when /data failed to
+// mount: the box boots regardless (the overlay keeps it alive), but the
+// pairing and everything else that used to live on /data is gone — this
+// boot runs on throwaway tmpfs. The screen names it and says what to do.
+func (d *Daemon) handleStorageScreen(w http.ResponseWriter, r *http.Request) {
+	writePage(w, storageScreenHTML(storageScreenData{
+		Name: d.displayName(),
+		IPs:  boxIPs(),
+	}))
 }
 
 func qrPNG(content string) (string, error) {

@@ -16,15 +16,27 @@ import (
 // apply path can be tested on a dev machine instead of a box.
 const (
 	DefaultTxtPath     = "/boot/firmware/syncphony.txt"
-	DefaultEnvPath     = "/etc/syncphony-box/config.env"
 	DefaultCmdlinePath = "/boot/firmware/cmdline.txt"
+
+	// Everything that must survive a power pull lives on the /data
+	// partition (MAD-805, ADR 0007); the root filesystem behind its
+	// overlay is read-only. The complete list is docs/persistent-paths.md.
+	DefaultDataDir = "/data"
+
+	// DefaultEnvPath is the applied config. It lives on /data (writable);
+	// /etc/syncphony-box/config.env is a symlink to it so the kiosk
+	// wrapper and the reset tool keep reading the path they always did.
+	// A missing /data only costs the write: apply logs it and the kiosk
+	// falls back to defaults.
+	DefaultEnvPath = "/data/syncphony-box/config.env"
 
 	// DefaultProfileDir is the Chromium profile: where the paired-display
 	// cookie and the speaker localStorage flag live (MAD-804, ADR 0006).
 	// It is the ONE place the path is defined — config.env carries it to
-	// the kiosk wrapper and the reset tool. Stage 3 moves it to /data by
-	// changing this constant. SB_PROFILE overrides it for dev and tests.
-	DefaultProfileDir = "/var/lib/syncphony-box/chromium"
+	// the kiosk wrapper and the reset tool, and it lives on /data so the
+	// pairing survives anything the overlay discards (MAD-805). SB_PROFILE
+	// overrides it for dev and tests.
+	DefaultProfileDir = "/data/chromium"
 )
 
 // Config is the validated result of parsing syncphony.txt. Invalid values

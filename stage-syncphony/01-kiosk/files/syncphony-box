@@ -2,19 +2,23 @@
 # syncphony-box — the admin command for a running box (run it with sudo,
 # from the console or SSH).
 #
-#   sudo syncphony-box reset    wipe the Chromium profile: the box forgets
-#                               its pairing and shows a new code on the TV.
-#                               Use it when the box moves to another room
-#                               or another server.
-#
-# The Chromium profile path comes from config.env (boxd's output), so it is
-# defined in exactly one place.
+#   sudo syncphony-box reset     wipe the Chromium profile: the box forgets
+#                                its pairing and shows a new code on the TV.
+#                                Use it when the box moves to another room
+#                                or another server.
+#   sudo syncphony-box chroot [CMD...]  work on the REAL root filesystem.
+#                                The box's / is an overlay (writes land in
+#                                tmpfs and vanish at reboot); chroot mounts
+#                                the real root read-write and chroots you
+#                                into it (a shell with no CMD), so package
+#                                updates and config edits stick. Reboot
+#                                afterwards. See docs/adr/0007.
 
 set -eu
 
 CONFIG_FILE=/etc/syncphony-box/config.env
 BOXD_BIN=/usr/lib/syncphony-box/boxd
-DEFAULT_PROFILE_DIR=/var/lib/syncphony-box/chromium
+DEFAULT_PROFILE_DIR=/data/chromium
 
 PROFILE_DIR="${DEFAULT_PROFILE_DIR}"
 if [ -r "${CONFIG_FILE}" ]; then
@@ -23,12 +27,24 @@ fi
 # config.env is written on every boot, but never trust an empty value.
 [ -n "${PROFILE_DIR}" ] || PROFILE_DIR="${DEFAULT_PROFILE_DIR}"
 
-case "${1:-}" in
-reset)
+need_root() {
 	if [ "$(id -u)" -ne 0 ]; then
-		echo "syncphony-box: reset needs root (try: sudo syncphony-box reset)" >&2
+		echo "syncphony-box: this needs root (try: sudo syncphony-box $1)" >&2
 		exit 1
 	fi
+}
+
+usage() {
+	cat << 'EOF'
+usage:
+  sudo syncphony-box reset            wipe the pairing (new pairing code)
+  sudo syncphony-box chroot [CMD...]  shell/command on the real root fs
+EOF
+}
+
+case "${1:-}" in
+reset)
+	need_root reset
 	echo "Wiping the Chromium profile at ${PROFILE_DIR}."
 	echo "This box will forget its room and show a new pairing code."
 	systemctl stop syncphony-kiosk.service
@@ -39,11 +55,47 @@ reset)
 	systemctl start syncphony-kiosk.service
 	echo "Done. The box is back on the pairing screen."
 	;;
+chroot)
+	need_root chroot
+	# The real root: mounted read-only by the initramfs at /media/root-ro.
+	# Work on a second, writable mount of the same device; the ro one keeps
+	# serving the running overlay untouched.
+	if [ "$(findmnt -n -o FSTYPE /)" != "overlay" ]; then
+		echo "syncphony-box: the overlay is not active, so / is already the real root." >&2
+		echo "Run your command directly." >&2
+		exit 1
+	fi
+	SRC="$(findmnt -n -o SOURCE /media/root-ro)" || {
+		echo "syncphony-box: /media/root-ro is not mounted; the overlay script should have left the real root there." >&2
+		exit 1
+	}
+	RW=/media/root-rw
+	mkdir -p "${RW}"
+	mount -o rw "${SRC}" "${RW}"
+	cleanup() {
+		cd /
+		umount -l "${RW}/dev" "${RW}/proc" "${RW}/sys" 2>/dev/null || true
+		umount "${RW}"
+	}
+	trap cleanup EXIT
+	mount --rbind /dev "${RW}/dev"
+	mount --rbind /proc "${RW}/proc"
+	mount --rbind /sys "${RW}/sys"
+	cp /etc/resolv.conf "${RW}/etc/resolv.conf" 2>/dev/null || true
+	echo "Real root mounted read-write at ${RW} — changes here survive reboots;"
+	echo "anything you used to change under / was going to tmpfs. Reboot when done."
+	if [ "$#" -gt 1 ]; then
+		shift
+		chroot "${RW}" "$@"
+	else
+		chroot "${RW}" /bin/bash
+	fi
+	;;
 help|-h|--help)
-	echo "usage: sudo syncphony-box reset    wipe the pairing (new pairing code)"
+	usage
 	;;
 *)
-	echo "usage: sudo syncphony-box reset    wipe the pairing (new pairing code)" >&2
+	usage >&2
 	exit 2
 	;;
 esac

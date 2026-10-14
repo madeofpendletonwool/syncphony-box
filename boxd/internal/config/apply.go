@@ -193,7 +193,12 @@ func syncCmdline(resolution, rotate string, p Paths, run RunCommand, log *log.Lo
 	if next == current {
 		return
 	}
-	if err := os.WriteFile(p.Cmdline, []byte(next+"\n"), 0o644); err != nil {
+	// /boot/firmware stays read-only (ADR 0007): the write goes through the
+	// remount dance, so a power pull can never catch the FAT half-written.
+	err := WithMountWritable(p.Cmdline, run, log, func() error {
+		return os.WriteFile(p.Cmdline, []byte(next+"\n"), 0o644)
+	})
+	if err != nil {
 		log.Printf("boxd config: cannot write %s; display settings stay as they are: %v", p.Cmdline, err)
 		return
 	}

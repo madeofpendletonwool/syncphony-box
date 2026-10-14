@@ -6,6 +6,8 @@
 #     to syncphony-box-<version>-arm64.img.xz (+ .sha256)
 #   - neutralizes stage2's EXPORT_IMAGE (pi-gen's documented SKIP_IMAGES
 #     mechanism) so only stage-syncphony exports an image
+#   - adds the third (/data) partition after export (scripts/
+#     add-data-partition.sh; pi-gen's export stage can only lay out two)
 #   - bind-mounts stage-syncphony into the build container at /stage-syncphony
 #     so the ../stage-syncphony entry of STAGE_LIST resolves (build-docker.sh
 #     bakes only the pi-gen submodule into the container image)
@@ -59,6 +61,12 @@ if [ ! -f "${IMAGE}" ]; then
 	ls -lah deploy >&2
 	exit 1
 fi
+
+# pi-gen's export stage ships a two-partition image; the box's /data
+# partition is appended now (needs sudo for losetup/mount/mke2fs, like
+# the smoke test). See ADR 0007.
+echo "Adding the /data partition..."
+./scripts/add-data-partition.sh "${IMAGE}"
 
 sha256sum "${IMAGE}" > "${IMAGE}.sha256"
 

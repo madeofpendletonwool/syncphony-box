@@ -27,6 +27,9 @@ func newTestDaemon(t *testing.T, txtContent string) (*Daemon, *recorder) {
 	rec := &recorder{}
 	t.Setenv("SB_TXT", txt)
 	t.Setenv("SB_ENV", env)
+	// No dev machine has /data mounted: the storage hook pins "healthy" so
+	// the screens under test don't trip over the host's mount table.
+	t.Setenv("SB_STORAGE", "ok")
 	d := New("test-version", log.New(log.Writer(), "", 0), rec.run)
 	return d, rec
 }
@@ -325,13 +328,60 @@ func TestStatusReportsServerAndTarget(t *testing.T) {
 		Server     string `json:"server"`
 		Reachable  bool   `json:"reachable"`
 		Target     string `json:"target"`
+		Storage    bool   `json:"storage"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &st)
 	if !st.Configured || st.Server != srv.URL || !st.Reachable {
 		t.Fatalf("got %+v", st)
 	}
+	if !st.Storage {
+		t.Fatalf("storage hook is ok but /status reports %+v", st)
+	}
 	if want := config.TargetURL(srv.URL, "test-version", "Den TV"); st.Target != want {
 		t.Fatalf("target %q, want %q", st.Target, want)
+	}
+}
+
+// --- storage-lost screen (MAD-805) -------------------------------------------
+
+// TestStorageScreenTakesOverStartAndSetup: without /data the box still
+// boots, but the kiosk must not pretend — the storage screen wins over
+// both entry pages, whatever the config says.
+func TestStorageScreenTakesOverStartAndSetup(t *testing.T) {
+	for _, tc := range []struct {
+		name, txt, path string
+	}{
+		{"unconfigured setup", "", "/setup"},
+		{"unconfigured start", "", "/start"},
+		{"configured start", "server_url=https://s.example\n", "/start"},
+		{"configured setup", "server_url=https://s.example\n", "/setup"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, _ := newTestDaemon(t, tc.txt)
+			t.Setenv("SB_STORAGE", "missing") // helper pins ok; lose /data here
+			rec := get(t, d.bridgeMux(), tc.path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), "lost its storage") {
+				t.Fatalf("no storage screen: %s", rec.Body)
+			}
+		})
+	}
+}
+
+func TestStorageScreenNamesWhatToDo(t *testing.T) {
+	d, _ := newTestDaemon(t, "server_url=https://s.example\nname=Den TV\n")
+	t.Setenv("SB_STORAGE", "missing")
+	rec := get(t, d.bridgeMux(), "/storage")
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	for _, want := range []string{"Den TV", "SD card", "pairing"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("storage screen should mention %q", want)
+		}
 	}
 }
 

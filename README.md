@@ -36,9 +36,10 @@ The result lands in `deploy/`:
 `make clean` removes build output and the leftover pi-gen build container.
 
 `make test` runs the unit tests — the bats suite (`tests/`) that pins the
-`syncphony.txt` behavior against a boxd binary built from the repo, plus
-`go test` for boxd — no hardware or image build needed; install bats
-(`apt install bats`) and Go first. `make lint` checks gofmt and go vet.
+`syncphony.txt` behavior and the `/data` persistence script against
+binaries built from the repo, plus `go test` for boxd — no hardware or
+image build needed; install bats (`apt install bats`) and Go first.
+`make lint` checks gofmt and go vet.
 CI runs them on every PR and push.
 
 ### Continuous integration
@@ -47,8 +48,9 @@ GitHub Actions builds the image natively on arm64 runners
 bats and Go tests, runs the no-hardware smoke test (`scripts/smoke-test.sh`
 loop-mounts the built image and checks packages, enabled units, the locked
 first user, the first-boot seed files, the kiosk session, the boot
-config file, the audio stack, and boxd), and uploads the image as a workflow
-artifact.
+config file, the audio stack, boxd, and the read-only-root layout: three
+partitions, the overlay wired into the initramfs, and every persistent
+path on /data), and uploads the image as a workflow artifact.
 
 ## boxd
 
@@ -96,9 +98,9 @@ from there.
 The box's whole identity is its Chromium profile: the server's
 `syncphony_display` pairing cookie and the "I'm the speaker" localStorage
 flag live there, so that's what must survive reboots and power cuts. The
-profile path is defined in one place (boxd's `DefaultProfileDir`;
-stage 3 moves it to `/data` by changing that constant) and reaches the
-kiosk wrapper through `config.env`. See
+profile lives on the **/data partition** (`/data/chromium` — see below);
+the path is defined in one place (boxd's `DefaultProfileDir`) and reaches
+the kiosk wrapper through `config.env`. See
 [docs/adr/0006-pairing-persistence.md](docs/adr/0006-pairing-persistence.md).
 
 Two mechanisms keep it durable:
@@ -122,6 +124,45 @@ sudo syncphony-box reset
 
 In a dev checkout, `make reset` does the same to a profile (point it with
 `SB_PROFILE=...`; it defaults to the box's path).
+
+## Safe to unplug: read-only root and /data
+
+The box is meant to be power-cycled like a TV — pulled at any moment,
+mid-song included. The image makes that structurally safe
+([docs/adr/0007](docs/adr/0007-readonly-root-and-data.md)):
+
+- **Three partitions:** boot (FAT), root (ext4), and **data** (ext4,
+  label `syncphony-data`). On first boot the data partition grows to fill
+  the card; the root never grows.
+- **The root filesystem is read-only behind an overlay** — the mechanism
+  raspi-config's "Overlay FS" option uses, enabled at build time: the
+  real root is the lower layer, every runtime write lands in a tmpfs
+  upper and evaporates at power-off. Nothing on the SD card is ever
+  half-written.
+- **Everything that must persist lives on /data** — the pairing (the
+  Chromium profile), the applied config, logs, the SSH host keys, the
+  Imager-created user, Wi-Fi credentials. The maintained list is
+  [docs/persistent-paths.md](docs/persistent-paths.md).
+- **/boot/firmware stays read-only** too; boxd remounts it rw for the
+  moment it writes `syncphony.txt` (the setup form) or a `resolution=`
+  change, then ro again.
+- **A damaged /data never hangs the boot**: the box comes up unpaired
+  and the TV says the storage is lost (fix: check or re-flash the card).
+
+The power-pull test procedure (50 pulls: during boot, during playback,
+seconds after pairing) is [docs/testing.md](docs/testing.md).
+
+**Maintaining the box.** Runtime writes under `/` are discarded by
+design, so package updates go to the real root through a chroot (the
+overlayroot-chroot role in this image):
+
+```sh
+sudo syncphony-box chroot            # shell on the real root, read-write
+# (or: sudo syncphony-box chroot apt full-upgrade)
+```
+
+Reboot afterwards. Changes to the pairing, config and anything else on
+`/data` need no chroot — that partition is writable at runtime.
 
 ## Audio
 
@@ -175,10 +216,10 @@ the box from booting; bad values are logged and fall back to defaults.
 | `cec` | `on`, `off` | `on` | switch the TV's input when music starts |
 
 On every boot, `syncphony-box-config.service` runs `boxd config apply`:
-it parses the file into `/etc/syncphony-box/config.env` before the kiosk
-starts; `resolution` and `rotate` also become a `video=HDMI-A-1:…D` kernel
-argument (the `D` forces the output on, so a TV that's off at boot still
-gets a picture later).
+it parses the file into `config.env` (kept on `/data`; `/etc/syncphony-box/config.env`
+is a symlink to it) before the kiosk starts; `resolution` and `rotate`
+also become a `video=HDMI-A-1:…D` kernel argument (the `D` forces the
+output on, so a TV that's off at boot still gets a picture later).
 
 Without a valid `server_url` the box shows its setup screen: a QR code you
 scan with a phone on the same network to set the server — no SD card
@@ -186,7 +227,9 @@ editing needed. (Editing the card still works too.)
 
 ### On-Pi checklist
 
-CI can't boot a Pi; verify these on hardware when one is at hand:
+CI can't boot a Pi; verify these on hardware when one is at hand. The
+destructive power-pull gauntlet (the done-when for the read-only root)
+has its own page: [docs/testing.md](docs/testing.md).
 
 - Boots to the server's `/tv` fullscreen in under ~30 s on a Pi 5.
 - `sudo systemctl kill --kill-who=all syncphony-kiosk` (or killing
@@ -194,13 +237,16 @@ CI can't boot a Pi; verify these on hardware when one is at hand:
 - No visible cursor — including with a mouse plugged in and wiggled.
 - No crash bubble, and no "restore pages" prompt after pulling power.
 - Pair → reboot → the box is back in the room and playing without a touch.
-- Pair → pull the power at random points 20 times (some within 10 s of
-  pairing, some during playback, some during boot) → it comes back paired
-  every time. If one is ever lost, `journalctl -u boxd` should show the
-  `paired event; syncing disks` line for that boot — that's the finding
-  to report.
 - `sudo syncphony-box reset` wipes the pairing: the box shows a fresh
   pairing code afterwards, and re-pairs normally.
+- Read-only root: `findmnt /` shows an overlay, `/boot/firmware` is `ro`,
+  `/data` is mounted, `touch /usr/bin/nope` survives only until a reboot,
+  and the setup form still saves (boxd remounts the boot partition around
+  its write).
+- First boot grows `/data` to fill the card (`lsblk`), root stays at
+  image size.
+- `sudo syncphony-box chroot apt update` writes the real root; the change
+  is still there after a reboot.
 - The `/tv` visualizer runs smoothly with GPU rasterization (check
   `chrome://gpu` on the box); if not, tune the GPU flags in the wrapper.
 - Edit `syncphony.txt` on a laptop (Notepad is fine), boot, and the server
@@ -246,14 +292,20 @@ CI can't boot a Pi; verify these on hardware when one is at hand:
 
 ```
 pi-gen/               pi-gen submodule (pinned, never edited)
-stage-syncphony/      custom pi-gen stage (packages, kiosk session, ...)
+stage-syncphony/      custom pi-gen stage (packages, kiosk session,
+                      read-only root, ...)
 boxd/                 the box's Go helper daemon (bridge, config, screens)
 config                pi-gen build configuration
-build.sh              wraps pi-gen's build-docker.sh (builds boxd first)
+build.sh              wraps pi-gen's build-docker.sh (builds boxd first,
+                      then appends the /data partition after export)
 Makefile              make image / make test / make lint / make clean
+scripts/add-data-partition.sh  the /data partition post-export step
 scripts/smoke-test.sh no-hardware image checks (used by CI)
-tests/                bats tests pinning the syncphony.txt behavior (used by CI)
+tests/                bats tests pinning the syncphony.txt and /data
+                      behavior (used by CI)
 docs/adr/             architecture decision records
+docs/persistent-paths.md  the list of everything that survives a power cut
+docs/testing.md       the hardware test procedures (power pulls & co)
 ```
 
 ## License
