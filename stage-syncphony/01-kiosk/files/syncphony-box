@@ -1,0 +1,49 @@
+#!/bin/sh
+# syncphony-box — the admin command for a running box (run it with sudo,
+# from the console or SSH).
+#
+#   sudo syncphony-box reset    wipe the Chromium profile: the box forgets
+#                               its pairing and shows a new code on the TV.
+#                               Use it when the box moves to another room
+#                               or another server.
+#
+# The Chromium profile path comes from config.env (boxd's output), so it is
+# defined in exactly one place.
+
+set -eu
+
+CONFIG_FILE=/etc/syncphony-box/config.env
+BOXD_BIN=/usr/lib/syncphony-box/boxd
+DEFAULT_PROFILE_DIR=/var/lib/syncphony-box/chromium
+
+PROFILE_DIR="${DEFAULT_PROFILE_DIR}"
+if [ -r "${CONFIG_FILE}" ]; then
+	. "${CONFIG_FILE}"
+fi
+# config.env is written on every boot, but never trust an empty value.
+[ -n "${PROFILE_DIR}" ] || PROFILE_DIR="${DEFAULT_PROFILE_DIR}"
+
+case "${1:-}" in
+reset)
+	if [ "$(id -u)" -ne 0 ]; then
+		echo "syncphony-box: reset needs root (try: sudo syncphony-box reset)" >&2
+		exit 1
+	fi
+	echo "Wiping the Chromium profile at ${PROFILE_DIR}."
+	echo "This box will forget its room and show a new pairing code."
+	systemctl stop syncphony-kiosk.service
+	"${BOXD_BIN}" profile reset "${PROFILE_DIR}"
+	# Recreate the directory as the kiosk user (the wrapper would too, but
+	# this way nothing can create it as root first).
+	install -d -o kiosk -g kiosk -m 0755 "${PROFILE_DIR}"
+	systemctl start syncphony-kiosk.service
+	echo "Done. The box is back on the pairing screen."
+	;;
+help|-h|--help)
+	echo "usage: sudo syncphony-box reset    wipe the pairing (new pairing code)"
+	;;
+*)
+	echo "usage: sudo syncphony-box reset    wipe the pairing (new pairing code)" >&2
+	exit 2
+	;;
+esac

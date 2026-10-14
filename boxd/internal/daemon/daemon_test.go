@@ -122,6 +122,64 @@ func TestHeartbeatRecordsBeat(t *testing.T) {
 	}
 }
 
+// countingSyncs swaps the daemon's disk sync for a counter and returns the
+// count function.
+func countingSyncs(d *Daemon) func() int {
+	var mu sync.Mutex
+	n := 0
+	d.mu.Lock()
+	d.syncDisk = func() error {
+		mu.Lock()
+		n++
+		mu.Unlock()
+		return nil
+	}
+	d.mu.Unlock()
+	return func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return n
+	}
+}
+
+func TestPairedAndUnpairedEventsFlushDisks(t *testing.T) {
+	d, _ := newTestDaemon(t, "server_url=https://s.example\n")
+	syncs := countingSyncs(d)
+	for _, ev := range []string{`{"type":"paired","roomId":"r1"}`, `{"type":"unpaired"}`} {
+		if rec := post(t, d.bridgeMux(), "/v1/events", ev); rec.Code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", ev, rec.Code, rec.Body)
+		}
+		waitFor(t, func() bool { return syncs() >= 1 })
+	}
+}
+
+func TestPlayingFlushesOncePerStartAndRateLimited(t *testing.T) {
+	d, _ := newTestDaemon(t, "server_url=https://s.example\n")
+	syncs := countingSyncs(d)
+
+	// A fresh playing start flushes.
+	if rec := post(t, d.bridgeMux(), "/v1/events", `{"type":"playing","roomId":"r1"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("playing: %d", rec.Code)
+	}
+	waitFor(t, func() bool { return syncs() >= 1 })
+
+	// A flush moments ago closes the rate-limit window: another playback
+	// start must not flush again.
+	d.mu.Lock()
+	d.lastFlush = time.Now()
+	d.mu.Unlock()
+	before := syncs()
+	for _, ev := range []string{`{"type":"paused"}`, `{"type":"idle"}`, `{"type":"playing"}`} {
+		if rec := post(t, d.bridgeMux(), "/v1/events", ev); rec.Code != http.StatusNoContent {
+			t.Fatalf("%s: %d", ev, rec.Code)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := syncs(); got != before {
+		t.Fatalf("rate limit failed: %d extra syncs", got-before)
+	}
+}
+
 // --- bridge: origin, host, CORS/PNA -----------------------------------------
 
 func TestOriginAllowedOnlyForConfiguredServer(t *testing.T) {

@@ -18,6 +18,13 @@ const (
 	DefaultTxtPath     = "/boot/firmware/syncphony.txt"
 	DefaultEnvPath     = "/etc/syncphony-box/config.env"
 	DefaultCmdlinePath = "/boot/firmware/cmdline.txt"
+
+	// DefaultProfileDir is the Chromium profile: where the paired-display
+	// cookie and the speaker localStorage flag live (MAD-804, ADR 0006).
+	// It is the ONE place the path is defined — config.env carries it to
+	// the kiosk wrapper and the reset tool. Stage 3 moves it to /data by
+	// changing this constant. SB_PROFILE overrides it for dev and tests.
+	DefaultProfileDir = "/var/lib/syncphony-box/chromium"
 )
 
 // Config is the validated result of parsing syncphony.txt. Invalid values
@@ -31,11 +38,16 @@ type Config struct {
 	Rotate     string
 	CEC        string
 	Warnings   []string
+
+	// ProfileDir is not a syncphony.txt key: it is always the default (or
+	// the SB_PROFILE hook, applied by Apply) so the Chromium profile path
+	// is defined in exactly one place.
+	ProfileDir string
 }
 
 // Defaults returns the config when nothing is set in the file.
 func Defaults() Config {
-	return Config{Audio: "hdmi", Rotate: "0", CEC: "on"}
+	return Config{Audio: "hdmi", Rotate: "0", CEC: "on", ProfileDir: DefaultProfileDir}
 }
 
 func (c *Config) warn(format string, args ...any) {
@@ -190,6 +202,7 @@ func (c Config) EnvContent() string {
 	fmt.Fprintf(&b, "RESOLUTION=%s\n", shellQuote(c.Resolution))
 	fmt.Fprintf(&b, "ROTATE=%s\n", shellQuote(c.Rotate))
 	fmt.Fprintf(&b, "CEC=%s\n", shellQuote(c.CEC))
+	fmt.Fprintf(&b, "PROFILE_DIR=%s\n", shellQuote(c.ProfileDir))
 	return b.String()
 }
 

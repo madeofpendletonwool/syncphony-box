@@ -91,6 +91,38 @@ on the box — including the GPU flags that let Chromium use the Pi's GPU.
 The browser enters through boxd's local pages and opens the server's `/tv`
 from there.
 
+## Staying paired
+
+The box's whole identity is its Chromium profile: the server's
+`syncphony_display` pairing cookie and the "I'm the speaker" localStorage
+flag live there, so that's what must survive reboots and power cuts. The
+profile path is defined in one place (boxd's `DefaultProfileDir`;
+stage 3 moves it to `/data` by changing that constant) and reaches the
+kiosk wrapper through `config.env`. See
+[docs/adr/0006-pairing-persistence.md](docs/adr/0006-pairing-persistence.md).
+
+Two mechanisms keep it durable:
+
+- When the `/tv` page reports a `paired` or `unpaired` event on the box
+  bridge (and, rate-limited, a playback start), boxd runs a `sync` burst —
+  Chromium writes cookies and localStorage lazily, and the burst pushes
+  those writes to the SD card seconds after they happen instead of up to
+  half a minute later. Pair, pull the power within 10 s, boot: still
+  paired.
+- Before every start the wrapper clears Chromium's "exited uncleanly"
+  state, so a power cut never turns into a "restore pages?" bubble on
+  the TV.
+
+**Resetting a box.** When a box moves to another room or another server,
+wipe the pairing so it shows a new code:
+
+```sh
+sudo syncphony-box reset
+```
+
+In a dev checkout, `make reset` does the same to a profile (point it with
+`SB_PROFILE=...`; it defaults to the box's path).
+
 ## Audio
 
 The box is the room's speaker: Chromium plays everything through the
@@ -161,6 +193,14 @@ CI can't boot a Pi; verify these on hardware when one is at hand:
   Chromium) brings the session back within a few seconds.
 - No visible cursor — including with a mouse plugged in and wiggled.
 - No crash bubble, and no "restore pages" prompt after pulling power.
+- Pair → reboot → the box is back in the room and playing without a touch.
+- Pair → pull the power at random points 20 times (some within 10 s of
+  pairing, some during playback, some during boot) → it comes back paired
+  every time. If one is ever lost, `journalctl -u boxd` should show the
+  `paired event; syncing disks` line for that boot — that's the finding
+  to report.
+- `sudo syncphony-box reset` wipes the pairing: the box shows a fresh
+  pairing code afterwards, and re-pairs normally.
 - The `/tv` visualizer runs smoothly with GPU rasterization (check
   `chrome://gpu` on the box); if not, tune the GPU flags in the wrapper.
 - Edit `syncphony.txt` on a laptop (Notepad is fine), boot, and the server

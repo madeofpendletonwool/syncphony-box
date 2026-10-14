@@ -135,10 +135,22 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 		room = *ev.RoomID
 	}
 	d.mu.Lock()
+	previous := d.lastEvent
 	d.lastEvent, d.lastEventAt = ev.Type, time.Now()
 	d.mu.Unlock()
 	// Stage 2: events are logged (CEC and the watchdog consume them in
-	// stage 3).
+	// stage 3). The pairing-critical ones also trigger the disk-flush
+	// burst that keeps this box paired across power cuts (MAD-804,
+	// ADR 0006): paired/unpaired wrote or removed the display cookie,
+	// and the playing start wrote the speaker localStorage flag.
+	switch ev.Type {
+	case "paired", "unpaired":
+		d.flushDisk(ev.Type)
+	case "playing":
+		if previous != "playing" { // once per playback start, not per repeat
+			d.flushDisk(ev.Type)
+		}
+	}
 	d.log.Printf("boxd: event type=%s room=%s", ev.Type, room)
 	w.WriteHeader(http.StatusNoContent)
 }

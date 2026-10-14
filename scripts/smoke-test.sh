@@ -10,8 +10,9 @@
 # place (user, unit, wrapper, boot tuning), the boot config file
 # (syncphony.txt) ships on the boot partition fully commented out, the
 # audio stack is in place (PipeWire user services for the kiosk user with
-# linger, the sink-selection units, the WirePlumber tuning), and boxd (the
-# Go helper daemon) is installed with its units enabled.
+# linger, the sink-selection units, the WirePlumber tuning), boxd (the
+# Go helper daemon) is installed with its units enabled, and the pairing
+# persistence pieces agree (one profile path, crash-state prep, reset).
 #
 # Later issues extend this test as the image grows (boxd, /data, ...).
 
@@ -122,6 +123,65 @@ if sudo grep -q 'config.env' "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
 	check "kiosk wrapper reads config.env" ok
 else
 	check "kiosk wrapper reads config.env" "no reference found"
+fi
+
+# --- pairing persistence (profile path, crash-state prep, reset) -------------
+# The Chromium profile path is defined once in boxd; the smoke test pins
+# that the wrapper, the parse output and the reset tool all agree on it.
+if sudo test -x "${WORK}/root/usr/bin/syncphony-box"; then
+	check "syncphony-box admin command installed" ok
+else
+	check "syncphony-box admin command installed" "missing or not executable"
+fi
+
+if sudo grep -q 'profile reset' "${WORK}/root/usr/bin/syncphony-box"; then
+	check "syncphony-box has the reset verb" ok
+else
+	check "syncphony-box has the reset verb" "no reset"
+fi
+
+if sudo grep -q 'profile prep' "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
+	check "kiosk wrapper preps the profile (no restore prompt)" ok
+else
+	check "kiosk wrapper preps the profile (no restore prompt)" "no 'profile prep' call"
+fi
+
+if sudo grep -q 'PROFILE_DIR' "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
+	check "kiosk wrapper uses the configurable profile dir" ok
+else
+	check "kiosk wrapper uses the configurable profile dir" "no PROFILE_DIR reference"
+fi
+
+# The image's boxd is a static arm64 binary and the CI runner is arm64, so
+# it can run directly; where it can't (a dev's x86 machine), skip the
+# run-time checks and keep the static ones.
+if out="$(sudo "${WORK}/root/usr/lib/syncphony-box/boxd" profile path 2>/dev/null)" &&
+	[ -n "${out}" ]; then
+	profile_dir="${out}"
+	check "boxd profile path answers" ok
+else
+	profile_dir="/var/lib/syncphony-box/chromium"
+	check "boxd profile path answers" "skipped (cannot run the arm64 binary here)"
+fi
+
+if sudo grep -qF "DATA_DIR=${profile_dir}" "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
+	check "wrapper profile fallback matches boxd's path" ok
+else
+	check "wrapper profile fallback matches boxd's path" "wrapper fallback is not ${profile_dir}"
+fi
+
+if sudo grep -q "PROFILE_DIR='${profile_dir}'" \
+	"${WORK}/root/etc/syncphony-box/config.env" 2>/dev/null; then
+	check "config.env names the profile dir" ok
+else
+	# config.env only exists after first boot; the parse output is what
+	# generates it.
+	if out="$(sudo "${WORK}/root/usr/lib/syncphony-box/boxd" parse "${WORK}/boot/syncphony.txt" 2>/dev/null)" &&
+		echo "${out}" | grep -qF "PROFILE_DIR='${profile_dir}'"; then
+		check "config.env names the profile dir" ok
+	else
+		check "config.env names the profile dir" "PROFILE_DIR missing from the parse output"
+	fi
 fi
 
 # --- boxd (the Go helper daemon) ----------------------------------------------
