@@ -65,7 +65,12 @@ func (d *Daemon) handleSetupSave(w http.ResponseWriter, r *http.Request) {
 	if name != "" {
 		pairs = append(pairs, config.KV{Key: "name", Value: name})
 	}
-	if err := config.SetKeys(d.paths.Txt, pairs...); err != nil {
+	// syncphony.txt sits on the read-only boot partition (ADR 0007): the
+	// save goes through the remount dance (rw, write, sync, ro).
+	err = config.WithMountWritable(d.paths.Txt, d.run, d.log, func() error {
+		return config.SetKeys(d.paths.Txt, pairs...)
+	})
+	if err != nil {
 		d.renderFormError(w, "Couldn't save the setting on the box's boot partition. Try again, or edit syncphony.txt on the SD card.")
 		d.log.Printf("boxd: setup: save failed: %v", err)
 		return

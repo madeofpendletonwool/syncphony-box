@@ -25,15 +25,16 @@ if [ -r "${CONFIG_FILE}" ]; then
 	. "${CONFIG_FILE}"
 fi
 
-# The Chromium profile (pairing cookie + speaker flag) lives in one place,
-# defined by boxd: config.env carries it, and boxd answers it directly when
-# config.env is missing. The literal below is only the last resort when
-# neither is available; the smoke test asserts it matches boxd's answer.
+# The Chromium profile (pairing cookie + speaker flag) lives on the /data
+# partition (MAD-805) — one path, defined by boxd: config.env carries it,
+# and boxd answers it directly when config.env is missing. The literal
+# below is only the last resort when neither is available; the smoke test
+# asserts it matches boxd's answer.
 DATA_DIR="${PROFILE_DIR:-}"
 if [ -z "${DATA_DIR}" ]; then
 	DATA_DIR="$("${BOXD_BIN}" profile path 2>/dev/null || true)"
 fi
-[ -n "${DATA_DIR}" ] || DATA_DIR=/var/lib/syncphony-box/chromium
+[ -n "${DATA_DIR}" ] || DATA_DIR=/data/chromium
 
 URL=''
 if curl -fsS -m 2 "${BOXD_URL}/healthz" >/dev/null 2>&1; then

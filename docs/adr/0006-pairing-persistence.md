@@ -31,14 +31,14 @@ Chromium crashes. Two facts make that non-trivial:
 
 ### One place defines the profile path
 
-`config.DefaultProfileDir` (`/var/lib/syncphony-box/chromium`) is the only
-definition; the `SB_PROFILE` env hook overrides it for dev and tests.
-`boxd config apply` writes it into `config.env` as `PROFILE_DIR=`, the
-kiosk wrapper reads it from there (asking `boxd profile path` when
-`config.env` is missing, with a last-resort literal the smoke test pins to
-boxd's answer), and `sudo syncphony-box reset` uses the same value. When
-stage 3 moves the profile to the `/data` partition (MAD-805), changing the
-constant is the whole change.
+`config.DefaultProfileDir` is the only definition; the `SB_PROFILE` env
+hook overrides it for dev and tests. `boxd config apply` writes it into
+`config.env` as `PROFILE_DIR=`, the kiosk wrapper reads it from there
+(asking `boxd profile path` when `config.env` is missing, with a
+last-resort literal the smoke test pins to boxd's answer), and `sudo
+syncphony-box reset` uses the same value. MAD-805 (stage 3, ADR 0007)
+moved the profile to the `/data` partition — `/data/chromium` — by
+changing exactly that constant.
 
 ### The bridge `paired` event triggers a sync burst
 
@@ -100,9 +100,12 @@ no-op when the profile doesn't exist.
 - `sync(2)` blocks for the length of the flush; on an idle Pi that is
   milliseconds, and it runs on a background goroutine so the bridge never
   waits for it.
-- Hardware verification stays on the on-Pi checklist (README): pair →
-  reboot → back in the room playing without a touch; 20 power pulls at
-  random points after pairing; no restore prompt after any of them.
+- Hardware verification stays on the on-Pi checklist (README) and the
+  power-pull gauntlet in docs/testing.md: pair → reboot → back in the
+  room playing without a touch; pulls at random points after pairing; no
+  restore prompt after any of them. With MAD-805 the profile sits on
+  /data behind a journaled ext4, so the bursts flush to the one
+  partition that persists.
 
 ## Considered and rejected
 

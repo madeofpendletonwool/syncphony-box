@@ -1,0 +1,143 @@
+#!/bin/sh
+# data-persist — move the box's runtime state across the /data boundary
+# (MAD-805, ADR 0007). The root filesystem sits behind an overlay with a
+# tmpfs upper layer, so everything written under /etc or /var vanishes at
+# power-off; /data is the only partition that persists.
+#
+# Most persistent things reach /data by a plain symlink (the Chromium
+# profile, journald's /var/log/journal, config.env — the complete list is
+# docs/persistent-paths.md). This script owns the few that cannot be a
+# symlink because something reads them too early or another tool rewrites
+# them atomically: the account files, the SSH host keys, the
+# NetworkManager connections, and the machine-id (seeded from /data by
+# the initramfs overlay script, saved back here).
+#
+#   restore  runs early on every boot (syncphony-data-prepare.service,
+#            before cloud-init/sshd/NetworkManager): put the saved state
+#            back, create any missing SSH keys, ensure the /data layout.
+#   save     runs after the system has settled and then every 15 minutes
+#            (syncphony-data-save.service/.timer): snapshot the state back
+#            to /data, so changes made mid-session survive a power pull
+#            (worst case: the last 15 minutes of account edits are lost).
+#
+# Dev/test hooks (same spirit as boxd's SB_* hooks): SB_DATA_DIR moves
+# /data, SB_ETC_DIR moves /etc, SB_SKIP_SSH=1 skips ssh-keygen.
+
+set -eu
+
+DATA="${SB_DATA_DIR:-/data}"
+ETC="${SB_ETC_DIR:-/etc}"
+IDENT="${DATA}/system/identity"
+SSHDIR="${DATA}/system/ssh"
+NETDIR="${DATA}/system/network"
+
+IDENTITY_FILES="passwd shadow group gshadow subuid subgid"
+SSH_KEY_TYPES="rsa ecdsa ed25519"
+
+# A missing or unmountable /data is a supported state (the box boots, the
+# TV says "storage lost"): every verb just exits. SB_DATA_DIR points at a
+# plain directory in dev, where the mount check makes no sense.
+data_usable() {
+	if [ -n "${SB_DATA_DIR:-}" ]; then
+		[ -d "${DATA}" ]
+		return
+	fi
+	grep -q " ${DATA} " /proc/mounts
+}
+
+# ensure_layout creates every directory anything on /data expects. It is
+# idempotent, so a fresh (or freshly reformatted) data partition is
+# bootstrapped by the first boot.
+ensure_layout() {
+	mkdir -p \
+		"${DATA}/chromium" \
+		"${DATA}/journal" \
+		"${DATA}/syncphony-box" \
+		"${DATA}/boxd" \
+		"${DATA}/system/cloud" \
+		"${IDENT}" "${SSHDIR}" "${NETDIR}"
+	# The Chromium profile belongs to the kiosk user. Harmless where the
+	# user doesn't exist (dev machines, test runs).
+	chown kiosk:kiosk "${DATA}/chromium" 2>/dev/null || true
+}
+
+restore() {
+	data_usable || exit 0
+	ensure_layout
+
+	# The account files: whatever the last save had. On a fresh card this
+	# is a no-op and cloud-init creates the user from the Imager settings.
+	for f in ${IDENTITY_FILES}; do
+		if [ -f "${IDENT}/${f}" ]; then
+			cp -p "${IDENT}/${f}" "${ETC}/${f}"
+		fi
+	done
+
+	# SSH host keys: restore first, then fill any that are missing. The
+	# /etc/ssh paths are symlinks into /data (see stage 06), so ssh-keygen
+	# -A writes straight to persistent storage.
+	for t in ${SSH_KEY_TYPES}; do
+		for suffix in "" ".pub"; do
+			key="ssh_host_${t}_key${suffix}"
+			if [ -f "${SSHDIR}/${key}" ]; then
+				cp -p "${SSHDIR}/${key}" "${ETC}/ssh/${key}"
+			fi
+		done
+	done
+	# ssh-keygen -A always operates on the real /etc/ssh, so it only runs
+	# against the box's own layout (never a dev/test SB_ETC_DIR).
+	if [ -z "${SB_SKIP_SSH:-}" ] && [ -z "${SB_ETC_DIR:-}" ]; then
+		ssh-keygen -A >/dev/null
+	fi
+
+	# Wi-Fi (and any other) connections the Imager settings created.
+	if [ -d "${NETDIR}" ] && [ -d "${ETC}/NetworkManager" ]; then
+		mkdir -p "${ETC}/NetworkManager/system-connections"
+		cp -a "${NETDIR}/." "${ETC}/NetworkManager/system-connections/" 2>/dev/null || true
+	fi
+}
+
+save() {
+	data_usable || exit 0
+	ensure_layout
+
+	for f in ${IDENTITY_FILES}; do
+		if [ -f "${ETC}/${f}" ]; then
+			cp -p "${ETC}/${f}" "${IDENT}/${f}"
+		fi
+	done
+
+	mkdir -p "${SSHDIR}"
+	for t in ${SSH_KEY_TYPES}; do
+		for suffix in "" ".pub"; do
+			key="ssh_host_${t}_key${suffix}"
+			if [ -f "${ETC}/ssh/${key}" ]; then
+				cp -p "${ETC}/ssh/${key}" "${SSHDIR}/${key}"
+			fi
+		done
+	done
+
+	NM="${ETC}/NetworkManager/system-connections"
+	if [ -d "${NM}" ] && [ -n "$(ls -A "${NM}" 2>/dev/null)" ]; then
+		cp -a "${NM}/." "${NETDIR}/"
+	fi
+
+	# The identity the initramfs seeds from on the next boot.
+	if [ -f "${ETC}/machine-id" ]; then
+		cp -p "${ETC}/machine-id" "${DATA}/system/machine-id"
+	fi
+
+	# Pairing-level durability: this is the same sync discipline the
+	# bridge's pairing burst uses — push it to the card now, not whenever
+	# the kernel feels like it.
+	sync
+}
+
+case "${1:-}" in
+restore) restore ;;
+save) save ;;
+*)
+	echo "usage: data-persist restore|save" >&2
+	exit 2
+	;;
+esac

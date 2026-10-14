@@ -82,6 +82,41 @@ type startScreenData struct {
 	Network string
 }
 
+type storageScreenData struct {
+	Name string
+	IPs  []string
+}
+
+// storageScreenHTML is the "the SD card's data partition is gone" screen
+// (MAD-805): shown instead of setup or start when /data never mounted.
+// There is nothing to retry on the TV — the fix is at the card — so the
+// page just names it. Pairing-wise nothing is lost that wasn't already:
+// the box re-pairs from scratch on the next boot with healthy storage.
+func storageScreenHTML(d storageScreenData) string {
+	b := &strings.Builder{}
+	t := template.Must(template.New("storage").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Syncphony Box — storage lost</title>
+<style>` + pageStyle + `</style>
+</head>
+<body>
+<main>
+	<h1>{{.Name}} lost its storage</h1>
+	<p>The card's data partition couldn't be read, so this box forgot its room
+	and its pairing. It is still running, but nothing survives a reboot.</p>
+	<p class="dim">Power it off, check or re-flash the SD card, and power it back
+	on — it will offer a fresh pairing code.</p>
+	{{if .IPs}}<p class="dim">Reach it at {{range .IPs}}<code>http://{{.}}</code> {{end}}</p>{{end}}
+</main>
+</body>
+</html>`))
+	t.Execute(b, d)
+	return b.String()
+}
+
 func startScreenHTML(d startScreenData) string {
 	targetJS, err := json.Marshal(d.Target)
 	if err != nil {

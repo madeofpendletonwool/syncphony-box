@@ -1,0 +1,16 @@
+[Unit]
+Description=Grow the /data filesystem to fill the card
+# The partition itself was grown in the initramfs (grow-data); this is the
+# online resize2fs that makes the filesystem notice. The marker keeps it a
+# first-boot affair; a reformatted /data loses the marker and grows again.
+ConditionPathIsMountPoint=/data
+ConditionPathExists=!/data/system/.grown
+After=data.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/resize2fs /dev/disk/by-label/syncphony-data
+ExecStartPost=/bin/touch /data/system/.grown
+
+[Install]
+WantedBy=multi-user.target

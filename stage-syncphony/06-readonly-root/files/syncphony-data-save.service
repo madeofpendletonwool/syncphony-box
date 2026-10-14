@@ -1,0 +1,14 @@
+[Unit]
+Description=Save persistent state to /data (read-only-root box)
+ConditionPathIsMountPoint=/data
+# After cloud-init's final stage and sshd, so a first boot saves the user
+# and host keys they created; the timer keeps saving so mid-session
+# changes survive a power pull.
+After=cloud-final.service ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/syncphony-box/data-persist save
+
+[Install]
+WantedBy=multi-user.target

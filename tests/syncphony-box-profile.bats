@@ -25,7 +25,7 @@ teardown() {
 @test "path prints the default profile dir" {
 	run "${SCRIPT}" profile path
 	[ "$status" -eq 0 ]
-	[ "$output" = "/var/lib/syncphony-box/chromium" ]
+	[ "$output" = "/data/chromium" ]
 }
 
 @test "path honors SB_PROFILE" {

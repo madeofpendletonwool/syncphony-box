@@ -349,6 +349,19 @@ func (d *Daemon) watch() {
 	}
 }
 
+// storageHealthy reports whether /data — the only partition that survives
+// the overlay (MAD-805, ADR 0007) — is mounted. Without it the box boots
+// anyway, but the pairing, the applied config and the logs are gone (they
+// live on tmpfs for the boot), so the kiosk shows the storage-lost screen
+// instead of pretending everything is fine. SB_STORAGE pins the answer in
+// dev and tests ("ok"/"missing"), like the other SB_* hooks.
+func storageHealthy() bool {
+	if v := os.Getenv("SB_STORAGE"); v != "" {
+		return v != "missing"
+	}
+	return config.Mounted(config.DefaultDataDir)
+}
+
 // boxIPs lists the box's LAN addresses (the offline screen shows them, so
 // whoever is setting the box up can reach the setup form by IP if mDNS
 // doesn't work on their phone).
