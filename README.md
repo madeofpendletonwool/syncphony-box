@@ -4,7 +4,9 @@ A flashable Raspberry Pi image that turns a Pi plugged into a TV into the
 room's big screen and its speaker — a kiosk for an existing
 [Syncphony](https://github.com/madeofpendletonwool/Syncphony) server. Flash
 the image with [Raspberry Pi Imager](https://www.raspberrypi.com/software/),
-plug the Pi into the TV, and it boots straight into the room.
+plug the Pi into the TV, and it boots straight into the room. An old PC or
+a mini-PC works too: boot the [x86-64 ISO](#on-a-pc-x86-64) from a USB
+stick and install it.
 
 The box is **client only**: it runs no Syncphony server. Point it at yours.
 
@@ -68,11 +70,52 @@ sha256sum --check --ignore-missing SHA256SUMS
 tagged source. (Imager checks the image against the listing's SHA-256 on
 its own while writing.)
 
+### On a PC (x86-64)
+
+Any 64-bit PC or mini-PC with 2 GB of RAM and a disk of 8 GB or more
+([ADR 0013](docs/adr/0013-x86-iso.md)). Turn **Secure Boot off** in the
+firmware settings; UEFI and legacy BIOS both work.
+
+1. **Download** `syncphony-box-<version>-amd64.iso` from the
+   [release](https://github.com/madeofpendletonwool/syncphony-box/releases)
+   and write it to a USB stick (Imager's **Use custom**, balenaEtcher,
+   or `sudo dd if=syncphony-box-<version>-amd64.iso of=/dev/sdX bs=4M
+   conv=fsync`). It's a hybrid ISO, so a DVD works too.
+2. **Boot the PC from the stick**, plugged into the TV. The menu has two
+   entries:
+   - **Syncphony Box** runs the box from the stick, with nothing
+     installed. Good for trying it. Its changes live in RAM, so it
+     forgets its setup and pairing at power-off, unless the stick has a
+     `syncphony-data` partition (below).
+   - **Install Syncphony Box to disk** erases a disk you pick and installs
+     the box on it. It offers an optional admin user (sudo, for SSH and
+     maintenance; a PC has no Imager to make one). When it's done, remove
+     the stick; the PC restarts into the box.
+3. **Point it at your server and pair**, as in steps 5 and 6 above. The
+   setup QR, the hotspot, updates and the read-only root all work as on
+   a Pi. There is no HDMI-CEC: most PC graphics can't send it.
+
+**Keeping a live stick's pairing.** Add a partition labelled
+`syncphony-data` to the stick, in the free space after the ISO, and the
+live box keeps its setup and pairing there:
+
+```sh
+# /dev/sdX is the stick with the ISO already written to it.
+echo ',,L' | sudo sfdisk --append /dev/sdX
+sudo mkfs.ext4 -L syncphony-data /dev/sdX4   # the ISO has 3; this is the 4th
+```
+
+Remove the stick before booting an installed box: both would offer a
+`syncphony-data` partition.
+
 ## Supported hardware
 
 - Raspberry Pi 4 or Pi 5, 2 GB RAM or more
 - 16 GB+ SD card
-- arm64 only. Pi 3, Pi Zero 2 W and armhf are not supported.
+- On a Pi, arm64 only. Pi 3, Pi Zero 2 W and armhf are not supported.
+- Or an x86-64 PC: 2 GB RAM, an 8 GB+ disk, Secure Boot off
+  ([On a PC](#on-a-pc-x86-64)). The ISO carries firmware for Intel and
+  AMD graphics; NVIDIA graphics are untested.
 - A case with a heatsink or a fan. A long party with the visualizer on
   warms a Pi in a closed case past its soft temperature limit, and the
   firmware silently halves the CPU first (the box logs temperature and
@@ -100,6 +143,13 @@ The result lands in `deploy/`:
   package. The image installs it, and boxes update to newer ones from the
   apt repo.
 
+`make iso` builds the x86-64 ISO the same way, with Debian's live-build
+in a privileged `debian:trixie` container (native on an x86 host,
+emulated and slow on an arm64 one): `syncphony-box-<version>-amd64.iso`,
+its `.sha256`, and the `_amd64.deb`. Both images run the same
+customisation (`rootfs/customise.sh`) inside their build chroots, so a
+change to the box lands in both ([ADR 0013](docs/adr/0013-x86-iso.md)).
+
 `make clean` removes build output and the leftover pi-gen build container.
 
 `make test` runs the unit tests — the bats suite (`tests/`) that pins the
@@ -117,8 +167,11 @@ loop-mounts the built image and checks packages, enabled units, the locked
 first user, the first-boot seed files, the kiosk session, the boot
 config file, the audio stack, boxd, and the read-only-root layout: three
 partitions, the overlay wired into the initramfs, and every persistent
-path on /data), and uploads the image as a workflow artifact. Pushing a
-`v*` tag also releases it; see [docs/releasing.md](docs/releasing.md).
+path on /data), and uploads the image as a workflow artifact. An x86
+runner builds the ISO alongside it and runs the same smoke test against
+the ISO's root filesystem, plus its boot menu (UEFI and BIOS), its
+initramfs and the installer. Pushing a `v*` tag releases both; see
+[docs/releasing.md](docs/releasing.md).
 
 ## boxd
 
@@ -386,10 +439,18 @@ the box from booting; bad values are logged and fall back to defaults.
 | `audio` | `hdmi`, `hdmi2`, `analog`, `usb` | `hdmi` | where the sound goes (`analog` is the Pi 4's jack — a Pi 5 has none; use `usb` for a DAC) |
 | `resolution` | e.g. `1920x1080@60` | auto | forces the HDMI mode (takes a reboot; the box reboots once on its own) |
 | `rotate` | `0`, `90`, `180`, `270` | `0` | rotates the screen (takes a reboot) |
-| `cec` | `on`, `off` | `on` | switch the TV's input when music starts (HDMI-CEC; the remote's keys drive the box too — [docs/hardware.md](docs/hardware.md) for the TV matrix) |
+| `cec` | `on`, `off` | `on` | switch the TV's input when music starts (HDMI-CEC; the remote's keys drive the box too — [docs/hardware.md](docs/hardware.md) for the TV matrix). Pi only |
 | `cec_standby` | `on`, `off` | `off` | put the TV in standby once the room has been idle (only ever a TV the box switched on itself) |
 | `cec_standby_minutes` | `1`–`240` | `30` | how many idle minutes before that standby |
 | `auto_update` | `on`, `off` | `on` | install updates every night around 04:00 ([Updates](#updates)) |
+
+On a PC box, `syncphony.txt` is on the `SB-BOOT` partition (the EFI
+system partition, also at `/boot/firmware`), and `resolution`/`rotate`
+go into `/boot/firmware/cmdline.cfg`, which GRUB reads. `audio=hdmi` and
+`hdmi2` are the first and second HDMI/DisplayPort outputs; `analog` is
+the headphone/line-out jack. In the live session (from the USB stick)
+the file is in RAM, or on the stick's `syncphony-data` partition, and
+`resolution`/`rotate` don't apply.
 
 On every boot, `syncphony-box-config.service` runs `boxd config apply`:
 it parses the file into `config.env` (kept on `/data`; `/etc/syncphony-box/config.env`
@@ -490,19 +551,27 @@ has its own page: [docs/testing.md](docs/testing.md).
 
 ```
 pi-gen/               pi-gen submodule (pinned, never edited)
+rootfs/               the shared customise layer both images run inside
+                      their chroot: package lists, the .deb, the steps
+                      (ADR 0013)
 packaging/root/       every file of the syncphony-box .deb, laid out as
                       it installs (units, kiosk wrapper, scripts, ...)
 packaging/debian/     the .deb's control template and postinst
 packaging/apt/        the updater's apt source and the repo's public key
 packaging/imager/     the Imager listing's icon
-stage-syncphony/      custom pi-gen stage: installs the .deb, then the
-                      image-only changes (cmdline, fstab, /data links, ...)
+stage-syncphony/      custom pi-gen stage: runs rootfs/customise.sh, then
+                      the Pi's boot partition (cmdline, config.txt, ...)
+x86/live/             live-build config and hooks for the x86 ISO
+x86/root/             the ISO's own files: the installer, its units and
+                      GRUB templates, the live session's /boot/firmware
 boxd/                 the box's Go helper daemon (bridge, config, screens,
                       watchdogs, CEC, Wi-Fi setup hotspot)
 config                pi-gen build configuration
 build.sh              wraps pi-gen's build-docker.sh (builds boxd and the
                       .deb first, then appends the /data partition)
-Makefile              make image / make test / make lint / make clean
+build-iso.sh          builds the x86 ISO with live-build in a container
+Makefile              make image / make iso / make test / make lint /
+                      make clean
 scripts/add-data-partition.sh  the /data partition post-export step
 scripts/smoke-test.sh no-hardware image checks (used by CI)
 scripts/build-deb.sh  builds the syncphony-box .deb

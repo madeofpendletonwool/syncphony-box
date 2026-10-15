@@ -1,8 +1,9 @@
 # Testing the box on hardware
 
-CI can't boot a Pi. The unit tests (bats + Go, `make test`) and the image
-smoke test (`scripts/smoke-test.sh`, runs in CI on every build) pin the
-image's structure; the checks below are for real hardware. The README's
+CI can't boot a Pi (or the x86 ISO). The unit tests (bats + Go, `make
+test`) and the image smoke test (`scripts/smoke-test.sh`, runs in CI on
+every build) pin the images' structure; the checks below are for real
+hardware, and for the ISO, a VM (the last section). The README's
 on-Pi checklist covers the everyday list — this page is the destructive
 one.
 
@@ -295,3 +296,87 @@ Then the negative cases:
   kernel update, check that it lands: `uname -r` after the reboot
   matches the newest `/lib/modules`, and the box still boots with the
   overlay (the initramfs was regenerated with the overlay script).
+
+## The x86 ISO in a VM (MAD-846)
+
+The done-when for the x86 box ([ADR 0013](adr/0013-x86-iso.md)), in QEMU
+on a Linux host. CI builds and smoke-tests the ISO but can't boot it.
+Have OVMF (`apt install ovmf`) for UEFI; BIOS is QEMU's default. The
+box's network is QEMU's user-mode NAT, so the server must be reachable
+from the host. Forward 8080 to open the box's setup page from the host
+(`http://localhost:8080`).
+
+```sh
+ISO=deploy/syncphony-box-<version>-amd64.iso
+UEFI="-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd"
+COMMON="-machine q35,accel=kvm -m 3G -smp 2 -vga virtio -display gtk \
+  -audiodev pa,id=snd -device intel-hda -device hda-output,audiodev=snd \
+  -nic user,model=virtio,hostfwd=tcp::8080-:80 \
+  -device i6300esb -watchdog-action reset"
+```
+
+`i6300esb` gives the VM a hardware watchdog, so `RuntimeWatchdogSec` has
+something to arm.
+
+### Live, UEFI and BIOS
+
+```sh
+qemu-system-x86_64 $COMMON $UEFI -cdrom "$ISO"   # UEFI
+qemu-system-x86_64 $COMMON -cdrom "$ISO"         # BIOS
+```
+
+For each: the menu shows **Syncphony Box** and **Install Syncphony Box
+to disk**; the first boots to the setup QR. Set the server from the host,
+pair from a phone (or the room), queue a song: it plays through the
+VM's sound. `findmnt /` is live-boot's overlay; `systemctl status
+syncphony-update.timer` shows its service skipped (condition), not
+failed.
+
+### Live with a data partition
+
+```sh
+cp "$ISO" stick.img && truncate -s 4G stick.img
+echo ',,L' | sfdisk --append stick.img
+LOOP=$(sudo losetup --find --show --partscan stick.img)
+sudo mkfs.ext4 -L syncphony-data "${LOOP}p4" && sudo losetup -d "$LOOP"
+qemu-system-x86_64 $COMMON $UEFI -drive file=stick.img,format=raw,if=virtio
+```
+
+(The ISO itself is three GPT partitions; the appended one is the 4th.)
+Set the server and pair, power the VM off hard (close the window),
+start it again: still paired, same server, and
+`/data/boot-firmware/syncphony.txt` has the server URL.
+
+### Install to disk
+
+```sh
+qemu-img create -f qcow2 disk.qcow2 16G
+qemu-system-x86_64 $COMMON $UEFI -cdrom "$ISO" \
+  -drive file=disk.qcow2,if=virtio -boot d
+```
+
+Pick **Install Syncphony Box to disk**. The installer offers `/dev/vda`
+only (never the CD), asks before erasing, offers the admin user; give it
+one. After the restart, boot from the disk (drop `-cdrom` and
+`-boot d`):
+
+- the box comes up on the setup QR; set the server, pair, play;
+- `ssh -p <forwarded port> <admin>@localhost` works with the password
+  (add `hostfwd=tcp::2222-:22` to the `-nic` line);
+- `findmnt /` is the overlay, `findmnt /boot/firmware` is the `SB-BOOT`
+  vfat mounted `ro`, `findmnt /data` is `syncphony-data`; `lsblk`
+  shows four partitions with `/data` taking the rest of the disk;
+- `touch /usr/bin/nope` is gone after a reboot;
+- **pull the plug** (close the window) mid-song, start again: still
+  paired, playing on its own;
+- `resolution=1280x720` through the setup page or `syncphony.txt`: the
+  box reboots once and `cat /proc/cmdline` has
+  `video=HDMI-A-1:1280x720D` (whether the VM's display honors it
+  depends on its connector name; the cmdline is what's under test);
+- `curl -s 127.0.0.1:8099/v1/info` has `temperatureC` if the VM exposes
+  a thermal zone (often it doesn't; then it's absent, not zero);
+- `sudo syncphony-box update` runs and leaves the box booting.
+
+Repeat the install with BIOS (no `$UEFI`) on a fresh disk, and boot the
+UEFI-installed disk with BIOS and vice versa: one install boots both
+ways.

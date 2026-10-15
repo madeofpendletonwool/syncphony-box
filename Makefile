@@ -1,7 +1,11 @@
-.PHONY: image clean test lint reset
+.PHONY: image iso clean test lint reset
 
 image:
 	./build.sh
+
+# The x86-64 live/installer ISO (MAD-846): live-build in a Debian container.
+iso:
+	./build-iso.sh
 
 test: .build/boxd
 	@command -v bats >/dev/null 2>&1 || { echo "bats is required (e.g. apt install bats)"; exit 1; }
@@ -28,5 +32,5 @@ reset: .build/boxd
 
 clean:
 	rm -rf deploy .build
-	rm -rf stage-syncphony/00-packages/files
+	rm -rf stage-syncphony/*/files
 	-docker rm -v pigen_work >/dev/null 2>&1 || true

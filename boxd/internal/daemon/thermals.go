@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,10 +16,16 @@ import (
 // flags, sampled once a minute into the journal (one line per sample, so
 // `journalctl -u boxd` doubles as a temperature log) and reported through
 // /v1/info for the room's Screens list (stage 4). vcgencmd is the
-// Raspberry Pi firmware tool (raspi-utils-core); where it is missing —
-// a dev machine, a test — thermals simply go unreported and everything
-// downstream tolerates their absence.
+// Raspberry Pi firmware tool (raspi-utils-core). Without it — an x86 box
+// (MAD-846) — the temperature comes from the kernel's thermal zones in
+// /sys/class/thermal, with no throttling flags (a PC has no equivalent of
+// the Pi firmware's bitmap). With neither, thermals simply go unreported
+// and everything downstream tolerates their absence.
 const thermalsEvery = time.Minute
+
+// defaultThermalDir is where the kernel lists its thermal zones; the
+// SB_THERMAL_DIR hook points it at a fixture in tests.
+const defaultThermalDir = "/sys/class/thermal"
 
 // thermals is one sample. The flags are vcgencmd get_throttled's bitmap:
 // four conditions, current in bits 0-3 and the same four again as sticky
@@ -32,6 +40,7 @@ type thermals struct {
 	at       time.Time
 	tempC    float64
 	rawFlags uint64
+	hasFlags bool // the source reports throttling flags (vcgencmd only)
 }
 
 func (t thermals) valid() bool { return !t.at.IsZero() }
@@ -45,14 +54,17 @@ func (t thermals) limitedNow() bool {
 func (t thermals) underVoltage() bool     { return t.rawFlags&(1<<0) != 0 }
 func (t thermals) throttleOccurred() bool { return t.rawFlags&(0xF<<16) != 0 }
 
-// infoFields is what /v1/info (and /status) add once a sample exists.
+// infoFields is what /v1/info (and /status) add once a sample exists. The
+// flag fields only come from a source that has them: a PC's thermal zone
+// saying nothing about throttling is not "not throttled".
 func (t thermals) infoFields() map[string]any {
-	return map[string]any{
-		"temperatureC":     math.Round(t.tempC*10) / 10,
-		"throttled":        t.limitedNow(),
-		"underVoltage":     t.underVoltage(),
-		"throttleOccurred": t.throttleOccurred(),
+	m := map[string]any{"temperatureC": math.Round(t.tempC*10) / 10}
+	if t.hasFlags {
+		m["throttled"] = t.limitedNow()
+		m["underVoltage"] = t.underVoltage()
+		m["throttleOccurred"] = t.throttleOccurred()
 	}
+	return m
 }
 
 // realVcgencmd runs the firmware tool (on the box; the daemon field is
@@ -66,8 +78,8 @@ func realVcgencmd(args ...string) (string, error) {
 }
 
 // sampleThermalsLoop samples immediately and then once a minute. It
-// returns for good where vcgencmd doesn't exist (not a Pi): thermals are
-// optional and absent-by-default everywhere they're reported.
+// returns for good where neither vcgencmd nor a thermal zone exists:
+// thermals are optional and absent-by-default everywhere they're reported.
 func (d *Daemon) sampleThermalsLoop() {
 	if !d.sampleThermals() {
 		return
@@ -80,14 +92,23 @@ func (d *Daemon) sampleThermalsLoop() {
 }
 
 // sampleThermals takes one sample, stores it and logs it. It reports
-// false only for "there is no vcgencmd here" (stop sampling); a
+// false only for "there is nothing to sample here" (stop sampling); a
 // transient failure keeps the loop alive and the journal informed.
 func (d *Daemon) sampleThermals() bool {
+	if d.thermalZone != "" {
+		return d.sampleThermalZone()
+	}
 	tempOut, err := d.vcgencmd("measure_temp")
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			d.log.Printf("boxd: thermals: no vcgencmd; temperature and throttling go unreported")
-			return false
+			zone, ok := pickThermalZone(d.thermalDir)
+			if !ok {
+				d.log.Printf("boxd: thermals: no vcgencmd and no thermal zone; temperature goes unreported")
+				return false
+			}
+			d.thermalZone = zone
+			d.log.Printf("boxd: thermals: no vcgencmd; reading %s (no throttling flags)", zone)
+			return d.sampleThermalZone()
 		}
 		d.log.Printf("boxd: thermals: %v", err)
 		return true
@@ -99,7 +120,7 @@ func (d *Daemon) sampleThermals() bool {
 	}
 	now := time.Now()
 	d.mu.Lock()
-	d.therm = thermals{at: now, tempC: temp, rawFlags: flags}
+	d.therm = thermals{at: now, tempC: temp, rawFlags: flags, hasFlags: true}
 	d.mu.Unlock()
 	if tempOK {
 		d.log.Printf("boxd: thermals temp=%.1f'C throttled=0x%x", temp, flags)
@@ -130,4 +151,65 @@ func parseThrottleFlags(out string) uint64 {
 		return 0
 	}
 	return f
+}
+
+// sampleThermalZone is sampleThermals for a box without vcgencmd: one
+// read of the chosen zone's temp file (millidegrees Celsius).
+func (d *Daemon) sampleThermalZone() bool {
+	temp, err := readZoneTempC(d.thermalZone)
+	if err != nil {
+		d.log.Printf("boxd: thermals: %v", err)
+		return true
+	}
+	d.mu.Lock()
+	d.therm = thermals{at: time.Now(), tempC: temp}
+	d.mu.Unlock()
+	d.log.Printf("boxd: thermals temp=%.1f'C", temp)
+	return true
+}
+
+// thermalZonePreference ranks zone types: the CPU package sensor first,
+// then the other CPU/SoC sensors, then ACPI's board zone. A zone of any
+// other type (a Wi-Fi card's, say) is only a last resort.
+var thermalZonePreference = []string{
+	"x86_pkg_temp", "cpu-thermal", "cpu_thermal", "soc_dts0", "soc_dts1", "acpitz",
+}
+
+// pickThermalZone returns the zone directory to sample under dir
+// (/sys/class/thermal): the best-ranked type that reads, else the first
+// zone that reads at all.
+func pickThermalZone(dir string) (string, bool) {
+	zones, _ := filepath.Glob(filepath.Join(dir, "thermal_zone*"))
+	best, bestRank := "", len(thermalZonePreference)+1
+	for _, z := range zones {
+		if _, err := readZoneTempC(z); err != nil {
+			continue
+		}
+		rank := len(thermalZonePreference)
+		if typ, err := os.ReadFile(filepath.Join(z, "type")); err == nil {
+			for i, want := range thermalZonePreference {
+				if strings.TrimSpace(string(typ)) == want {
+					rank = i
+					break
+				}
+			}
+		}
+		if rank < bestRank {
+			best, bestRank = z, rank
+		}
+	}
+	return best, best != ""
+}
+
+// readZoneTempC reads a thermal zone's temp (millidegrees) as Celsius.
+func readZoneTempC(zone string) (float64, error) {
+	data, err := os.ReadFile(filepath.Join(zone, "temp"))
+	if err != nil {
+		return 0, err
+	}
+	milli, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return float64(milli) / 1000, nil
 }

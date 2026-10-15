@@ -36,6 +36,9 @@ func newTestDaemon(t *testing.T, txtContent string) (*Daemon, *recorder) {
 	// The nightly update's last result (MAD-810): none unless a test
 	// writes one.
 	t.Setenv("SB_UPDATE_STATE", filepath.Join(dir, "update.json"))
+	// No thermal zones unless a test makes some (the host's own must not
+	// leak into the no-vcgencmd tests).
+	t.Setenv("SB_THERMAL_DIR", filepath.Join(dir, "thermal"))
 	d := New("test-version", log.New(log.Writer(), "", 0), rec.run)
 	return d, rec
 }

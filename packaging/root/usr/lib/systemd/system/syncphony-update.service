@@ -4,6 +4,9 @@ Documentation=https://github.com/madeofpendletonwool/syncphony-box/blob/main/doc
 # boxd answers "is music playing?" and owns the auto_update= setting.
 After=network-online.target boxd.service
 Wants=network-online.target
+# An x86 live session (MAD-846) has no real root to update: it runs from
+# the read-only ISO, and its overlay is RAM. Installed boxes and Pis only.
+ConditionKernelCommandLine=!boot=live
 
 [Service]
 Type=oneshot

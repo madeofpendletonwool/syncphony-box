@@ -1,0 +1,32 @@
+#!/bin/bash
+# The x86 side of the shared customise layer (MAD-846, ADR 0013).
+# live-build runs this inside the chroot after its own packages and the
+# includes (x86/root, plus rootfs/ and the .deb that ./build-iso.sh puts
+# in /root/syncphony-rootfs).
+set -euo pipefail
+
+# The box: the same script the Pi image's pi-gen stage runs.
+/root/syncphony-rootfs/customise.sh x86 /root/syncphony-rootfs/syncphony-box.deb
+rm -rf /root/syncphony-rootfs
+
+# /data by label: the live session finds a syncphony-data partition on the
+# stick this way. A short timeout, because a stick without one is normal
+# here and the box waits for the mount before boxd starts. The installer
+# writes its own fstab with UUIDs.
+sed -i 's|^DATADEV[[:space:]].*|LABEL=syncphony-data  /data  ext4  defaults,nofail,x-systemd.device-timeout=5s  0  2|' /etc/fstab
+
+# The image-only units (x86/root): the live session's /boot/firmware and
+# the installer's boot entry.
+systemctl enable syncphony-live-boot.service syncphony-installer.service
+
+echo syncphony-box > /etc/hostname
+
+# Every live boot (and an installed box's first boot) makes its own id;
+# data-persist keeps an installed box's from then on (ADR 0007).
+: > /etc/machine-id
+rm -f /var/lib/dbus/machine-id
+
+# The initramfs, now that the overlay script, its hook and the module
+# list are all in place. Both the live session and the installed box boot
+# this one (live-boot's scripts for boot=live, the box's for boot=overlay).
+update-initramfs -u -k all

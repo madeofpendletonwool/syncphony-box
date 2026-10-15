@@ -66,7 +66,8 @@ chmod 0755 "${PKG}/usr/bin/syncphony-box" \
 	"${PKG}/usr/lib/syncphony-box/kiosk" \
 	"${PKG}/usr/lib/syncphony-box/audio-setup" \
 	"${PKG}/usr/lib/syncphony-box/data-persist" \
-	"${PKG}/etc/initramfs-tools/scripts/local-premount/grow-data"
+	"${PKG}/etc/initramfs-tools/scripts/local-premount/grow-data" \
+	"${PKG}/etc/initramfs-tools/hooks/syncphony-box"
 
 install -d -m 0755 "${PKG}/DEBIAN"
 installed_kb="$(du -sk --apparent-size "${PKG}" | cut -f1)"

@@ -19,6 +19,13 @@ const (
 	DefaultTxtPath     = "/boot/firmware/syncphony.txt"
 	DefaultCmdlinePath = "/boot/firmware/cmdline.txt"
 
+	// DefaultGrubCmdlinePath is the kernel command line on an x86 box
+	// (MAD-846, ADR 0013). /boot/firmware is the EFI system partition
+	// there, and GRUB can't read a plain file into the command line, so
+	// the installer writes this GRUB script instead and grub.cfg sources
+	// it. When it exists it wins over cmdline.txt.
+	DefaultGrubCmdlinePath = "/boot/firmware/cmdline.cfg"
+
 	// Everything that must survive a power pull lives on the /data
 	// partition (MAD-805, ADR 0007); the root filesystem behind its
 	// overlay is read-only. The complete list is docs/persistent-paths.md.

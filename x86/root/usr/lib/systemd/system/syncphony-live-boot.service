@@ -1,0 +1,19 @@
+[Unit]
+Description=Live session: a /boot/firmware for syncphony.txt
+Documentation=https://github.com/madeofpendletonwool/syncphony-box/blob/main/docs/adr/0013-x86-iso.md
+# The x86 ISO's live session (MAD-846) boots from read-only media with no
+# boot partition. This gives boxd a /boot/firmware/syncphony.txt: kept on
+# /data when the stick has a syncphony-data partition (so the setup
+# survives a reboot), in RAM otherwise.
+ConditionKernelCommandLine=boot=live
+DefaultDependencies=no
+After=local-fs.target data.mount
+Before=syncphony-box-config.service boxd.service syncphony-data-prepare.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/syncphony-box/live-boot-firmware
+
+[Install]
+WantedBy=multi-user.target

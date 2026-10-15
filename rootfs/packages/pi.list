@@ -1,0 +1,5 @@
+# Raspberry Pi only, on top of common.list.
+
+# vcgencmd (raspi-utils-core) is what boxd samples every minute for the
+# temperature and the firmware's throttling flags (MAD-806).
+raspi-utils-core

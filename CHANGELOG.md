@@ -8,6 +8,14 @@ Add to `## [Unreleased]` as you go; rename it when you tag.
 ## [Unreleased]
 
 ### Added
+- **The box on any x86-64 PC.** Each release also has
+  `syncphony-box-<version>-amd64.iso`, a hybrid ISO for a USB stick or
+  DVD, UEFI or legacy BIOS (Secure Boot off). Boot **Syncphony Box** to
+  run the box from the stick (a `syncphony-data` partition on the stick
+  keeps its pairing), or **Install Syncphony Box to disk** to install it,
+  with the same read-only root, `/data`, setup and nightly updates as a
+  Pi. Thermals come from the PC's thermal zones, `audio=` picks a PC's
+  HDMI/DisplayPort or analog outputs, and there's no HDMI-CEC.
 - **Releases you can flash from Raspberry Pi Imager.** A `v*` tag builds
   the image, smoke-tests it and publishes a GitHub Release with the
   `.img.xz`, its checksum, a cosign-signed `SHA256SUMS` and the notes
@@ -37,6 +45,8 @@ Add to `## [Unreleased]` as you go; rename it when you tag.
 ### Changed
 - The image is smaller: documentation, man pages and translations are
   stripped (copyright files stay).
+- The Pi image and the x86 ISO are built from one shared customisation
+  layer (`rootfs/`), so they can't drift apart.
 
 ## [0.1.0]
 

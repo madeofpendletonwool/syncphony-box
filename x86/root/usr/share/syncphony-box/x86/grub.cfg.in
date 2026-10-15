@@ -1,0 +1,28 @@
+# The Syncphony Box boot menu (MAD-846, ADR 0013), written by
+# syncphony-install onto the EFI system partition. One entry: the root
+# read-only behind the overlay (boot=overlay, the Pi's mechanism, ADR
+# 0007), with the kernel command line from cmdline.cfg next to this
+# directory. boxd rewrites that file for resolution= and rotate=.
+set default=0
+set timeout_style=hidden
+set timeout=1
+
+insmod part_gpt
+insmod fat
+insmod ext2
+insmod all_video
+
+# $root starts as the partition grub.cfg was loaded from: the EFI one.
+set esp="${root}"
+set syncphony_cmdline="boot=overlay quiet"
+if [ -f "(${esp})/cmdline.cfg" ]; then
+	source "(${esp})/cmdline.cfg"
+fi
+export syncphony_cmdline
+
+search --no-floppy --fs-uuid --set=root @ROOT_UUID@
+
+menuentry "Syncphony Box" {
+	linux /vmlinuz root=UUID=@ROOT_UUID@ ${syncphony_cmdline}
+	initrd /initrd.img
+}

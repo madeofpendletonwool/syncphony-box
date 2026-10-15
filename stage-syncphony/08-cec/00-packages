@@ -1,4 +1,0 @@
-# HDMI-CEC (MAD-807, ADR 0009): cec-ctl (v4l-utils) is how boxd talks to
-# the kernel CEC framework — registering the playback logical address,
-# watching the bus, and waking/switching/standing-by the TV.
-v4l-utils

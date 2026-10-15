@@ -1,5 +1,0 @@
-# The Wi-Fi setup hotspot (MAD-808, ADR 0010): NetworkManager (the Pi OS
-# default; listed so the dependency is explicit) runs the access point,
-# and its shared mode needs dnsmasq-base for DHCP and DNS on it.
-network-manager
-dnsmasq-base

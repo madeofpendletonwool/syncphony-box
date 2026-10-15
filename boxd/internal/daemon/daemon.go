@@ -87,6 +87,10 @@ type Daemon struct {
 	// vcgencmd samples the hardware thermals; a func field so tests can
 	// feed readings without a Pi.
 	vcgencmd func(args ...string) (string, error)
+	// thermalDir is where the thermal zones are read when there is no
+	// vcgencmd (x86, MAD-846); thermalZone is the one picked, once.
+	thermalDir  string
+	thermalZone string
 
 	startedAt      time.Time // boxd start; watchdog graces count from here
 	setupUntil     time.Time // LAN setup window open until then (zero = closed)
@@ -124,6 +128,12 @@ func New(version string, log *log.Logger, run config.RunCommand) *Daemon {
 		paths:     config.PathsFromEnv(),
 		startedAt: time.Now(),
 		vcgencmd:  realVcgencmd,
+		thermalDir: func() string {
+			if dir := os.Getenv("SB_THERMAL_DIR"); dir != "" {
+				return dir
+			}
+			return defaultThermalDir
+		}(),
 		syncDisk: func() error {
 			syscall.Sync()
 			return nil

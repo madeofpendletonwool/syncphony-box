@@ -2,8 +2,16 @@
 # Smoke-test a built syncphony-box image without hardware.
 #
 # Usage: scripts/smoke-test.sh deploy/syncphony-box-<version>-arm64.img.xz
+#        scripts/smoke-test.sh deploy/syncphony-box-<version>-amd64.iso
 #
-# Loop-mounts the image's three partitions and checks that the kiosk packages
+# The x86 ISO (MAD-846, ADR 0013) gets the same rootfs checks, run against
+# its squashfs: both images come out of the same customise layer
+# (rootfs/), so they must agree. The Pi-only checks (the three partitions,
+# cloud-init and the Imager seed, config.txt, vcgencmd) are skipped there,
+# and the ISO gets its own: both boot menus, the EFI and BIOS loaders, the
+# overlay inside the initramfs, the installer and the live-session units.
+#
+# For the Pi image: loop-mounts the image's three partitions and checks that the kiosk packages
 # are installed, the cloud-init first-boot machinery (which applies Raspberry
 # Pi Imager settings) is enabled, the first user is locked, the NoCloud
 # seed files are present on the boot partition, the kiosk session is in
@@ -32,16 +40,25 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-	echo "usage: $0 <image>.img.xz" >&2
+	echo "usage: $0 <image>.img.xz | <image>.iso" >&2
 	exit 2
 fi
 
 IMAGE_XZ="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+case "${IMAGE_XZ}" in
+	*.img.xz) PLATFORM=pi ;;
+	*.iso) PLATFORM=x86 ;;
+	*)
+		echo "$0: want a .img.xz (Pi) or an .iso (x86), got $1" >&2
+		exit 2
+		;;
+esac
 WORK="$(mktemp -d /tmp/syncphony-box-smoke.XXXXXX)"
 LOOP=""
 
 cleanup() {
 	sudo umount "${WORK}/boot" "${WORK}/root" "${WORK}/data" 2>/dev/null || true
+	sudo umount "${WORK}/iso" 2>/dev/null || true
 	if [ -n "${LOOP}" ]; then
 		sudo losetup -d "${LOOP}" 2>/dev/null || true
 	fi
@@ -61,15 +78,34 @@ check() {
 	fi
 }
 
-echo "Decompressing ${IMAGE_XZ} ..."
-xz -dk -T0 -c "${IMAGE_XZ}" > "${WORK}/image.img"
+# has_tokens LINE TOKEN...: every token is a whole word of LINE.
+has_tokens() {
+	local line=" $1 " tok
+	shift
+	for tok in "$@"; do
+		case "${line}" in *" ${tok} "*) ;; *) return 1 ;; esac
+	done
+}
 
-LOOP="$(sudo losetup --find --show --partscan "${WORK}/image.img")"
-mkdir -p "${WORK}/boot" "${WORK}/root" "${WORK}/data"
-sudo mount -o ro "${LOOP}p1" "${WORK}/boot"
-sudo mount -o ro "${LOOP}p2" "${WORK}/root"
-sudo mount -o ro "${LOOP}p3" "${WORK}/data"
+mkdir -p "${WORK}/boot" "${WORK}/root" "${WORK}/data" "${WORK}/iso"
+if [ "${PLATFORM}" = pi ]; then
+	echo "Decompressing ${IMAGE_XZ} ..."
+	xz -dk -T0 -c "${IMAGE_XZ}" > "${WORK}/image.img"
 
+	LOOP="$(sudo losetup --find --show --partscan "${WORK}/image.img")"
+	sudo mount -o ro "${LOOP}p1" "${WORK}/boot"
+	sudo mount -o ro "${LOOP}p2" "${WORK}/root"
+	sudo mount -o ro "${LOOP}p3" "${WORK}/data"
+	# The shipped syncphony.txt: on the boot partition.
+	TXT="${WORK}/boot/syncphony.txt"
+else
+	sudo mount -o loop,ro "${IMAGE_XZ}" "${WORK}/iso"
+	sudo mount -t squashfs -o loop,ro "${WORK}/iso/live/filesystem.squashfs" "${WORK}/root"
+	# The installer and the live session copy the packaged template.
+	TXT="${WORK}/root/usr/lib/syncphony-box/syncphony.txt"
+fi
+
+if [ "${PLATFORM}" = pi ]; then
 # --- partitions: boot, root, data (MAD-805) ----------------------------------
 part_count="$(parted -m -s "${WORK}/image.img" print | awk -F: '$1 ~ /^[0-9]+$/ { n++ } END { print n }')"
 if [ "${part_count}" = "3" ]; then
@@ -101,11 +137,21 @@ if [ -n "${kiosk_uid}" ] && [ "${profile_owner}" = "${kiosk_uid}" ]; then
 else
 	check "/data/chromium owned by the kiosk user" "owner ${profile_owner}, kiosk uid ${kiosk_uid}"
 fi
+fi # pi
 
 # --- packages ---------------------------------------------------------------
-for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi-daemon \
+if [ "${PLATFORM}" = pi ]; then
+	platform_pkgs="cloud-init raspi-utils-core"
+	platform_units="cloud-config.service cloud-final.service"
+else
+	platform_pkgs="linux-image-amd64 live-boot libpam-systemd grub-pc-bin grub-efi-amd64-bin \
+		fdisk dosfstools whiptail firmware-misc-nonfree firmware-sof-signed alsa-ucm-conf"
+	platform_units="syncphony-live-boot.service syncphony-installer.service"
+fi
+# shellcheck disable=SC2086 # the platform lists split on purpose
+for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri avahi-daemon \
 	pipewire pipewire-bin pipewire-alsa pipewire-pulse wireplumber pulseaudio-utils alsa-utils \
-	raspi-utils-core systemd-timesyncd v4l-utils syncphony-box; do
+	systemd-timesyncd v4l-utils network-manager dnsmasq-base syncphony-box ${platform_pkgs}; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -121,10 +167,11 @@ for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi
 done
 
 # --- units ------------------------------------------------------------------
-for unit in cloud-config.service cloud-final.service syncphony-kiosk.service syncphony-box-config.service \
+# shellcheck disable=SC2086
+for unit in syncphony-kiosk.service syncphony-box-config.service \
 	avahi-daemon.service syncphony-audio.service syncphony-audio-monitor.service boxd.service \
 	syncphony-data-grow.service syncphony-data-prepare.service syncphony-data-save.service \
-	syncphony-data-save.timer systemd-timesyncd.service syncphony-update.timer; do
+	syncphony-data-save.timer systemd-timesyncd.service syncphony-update.timer ${platform_units}; do
 	state="$(systemctl --root="${WORK}/root" is-enabled "${unit}" 2>/dev/null || true)"
 	if [ "${state}" = "enabled" ]; then
 		check "unit ${unit} enabled" ok
@@ -201,16 +248,18 @@ else
 	check "kiosk wrapper uses the configurable profile dir" "no PROFILE_DIR reference"
 fi
 
-# The image's boxd is a static arm64 binary and the CI runner is arm64, so
-# it can run directly; where it can't (a dev's x86 machine), skip the
-# run-time checks and keep the static ones.
+# The image's boxd is a static binary for the image's architecture, and CI
+# smoke-tests each image on a runner of that architecture (arm64 for the
+# Pi, x86 for the ISO), so it can run directly; where it can't (an image
+# for the other architecture), skip the run-time checks and keep the
+# static ones.
 if out="$(sudo "${WORK}/root/usr/lib/syncphony-box/boxd" profile path 2>/dev/null)" &&
 	[ -n "${out}" ]; then
 	profile_dir="${out}"
 	check "boxd profile path answers" ok
 else
 	profile_dir="/data/chromium"
-	check "boxd profile path answers" "skipped (cannot run the arm64 binary here)"
+	check "boxd profile path answers" "skipped (cannot run the image's binary here)"
 fi
 
 if sudo grep -qF "DATA_DIR=${profile_dir}" "${WORK}/root/usr/lib/syncphony-box/kiosk"; then
@@ -225,7 +274,7 @@ if sudo grep -q "PROFILE_DIR='${profile_dir}'" \
 else
 	# config.env only exists after first boot; the parse output is what
 	# generates it.
-	if out="$(sudo "${WORK}/root/usr/lib/syncphony-box/boxd" parse "${WORK}/boot/syncphony.txt" 2>/dev/null)" &&
+	if out="$(sudo "${WORK}/root/usr/lib/syncphony-box/boxd" parse "${TXT}" 2>/dev/null)" &&
 		echo "${out}" | grep -qF "PROFILE_DIR='${profile_dir}'"; then
 		check "config.env names the profile dir" ok
 	else
@@ -240,12 +289,16 @@ else
 	check "boxd installed executable" "missing or not executable"
 fi
 
-# Static (CGO_ENABLED=0) arm64 binary — only verifiable where `file` runs
-# on it, i.e. on the arm64 CI runner.
+# Static (CGO_ENABLED=0) binary for the image's architecture.
+if [ "${PLATFORM}" = pi ]; then
+	boxd_arch='ARM aarch64'
+else
+	boxd_arch='x86-64'
+fi
 if ! command -v file >/dev/null 2>&1; then
 	check "boxd is a static binary" ok
 elif file "${WORK}/root/usr/lib/syncphony-box/boxd" 2>/dev/null |
-	grep -q 'ELF 64-bit LSB.*ARM aarch64.*statically linked'; then
+	grep -q "ELF 64-bit LSB.*${boxd_arch}.*statically linked"; then
 	check "boxd is a static binary" ok
 else
 	check "boxd is a static binary" "$(file "${WORK}/root/usr/lib/syncphony-box/boxd" 2>/dev/null)"
@@ -279,10 +332,12 @@ else
 	check "kiosk unit waits for time sync" "no time-sync.target ordering"
 fi
 
-if sudo test -x "${WORK}/root/usr/bin/vcgencmd"; then
-	check "vcgencmd installed (thermals)" ok
-else
-	check "vcgencmd installed (thermals)" "missing or not executable"
+if [ "${PLATFORM}" = pi ]; then
+	if sudo test -x "${WORK}/root/usr/bin/vcgencmd"; then
+		check "vcgencmd installed (thermals)" ok
+	else
+		check "vcgencmd installed (thermals)" "missing or not executable"
+	fi
 fi
 
 # --- HDMI-CEC (MAD-807) --------------------------------------------------------
@@ -368,14 +423,14 @@ else
 	check "kiosk unit waits for boxd" "no boxd reference"
 fi
 
-if [ -f "${WORK}/boot/syncphony.txt" ]; then
-	check "boot partition has syncphony.txt" ok
+if [ -f "${TXT}" ]; then
+	check "syncphony.txt ships (${TXT#"${WORK}"/})" ok
 else
-	check "boot partition has syncphony.txt" "missing"
+	check "syncphony.txt ships (${TXT#"${WORK}"/})" "missing"
 fi
 
 # The file must ship fully commented out: every non-comment line is empty.
-active="$(sudo grep -Ev '^[[:space:]]*(#|$)' "${WORK}/boot/syncphony.txt" 2>/dev/null || true)"
+active="$(sudo grep -Ev '^[[:space:]]*(#|$)' "${TXT}" 2>/dev/null || true)"
 if [ -z "${active}" ]; then
 	check "syncphony.txt ships fully commented out" ok
 else
@@ -383,7 +438,7 @@ else
 fi
 
 for key in server_url name audio resolution rotate cec cec_standby cec_standby_minutes auto_update; do
-	if sudo grep -q "^#${key}=" "${WORK}/boot/syncphony.txt"; then
+	if sudo grep -q "^#${key}=" "${TXT}"; then
 		check "syncphony.txt documents ${key}" ok
 	else
 		check "syncphony.txt documents ${key}" "no commented ${key}= line"
@@ -434,7 +489,15 @@ else
 fi
 
 # --- boot presentation ------------------------------------------------------
-CMDLINE=" $(sudo cat "${WORK}/boot/cmdline.txt") "
+# The installed box's kernel command line: the Pi's cmdline.txt, or on x86
+# the cmdline.cfg the installer puts on the EFI partition (boxd rewrites
+# both; ADR 0013).
+if [ "${PLATFORM}" = pi ]; then
+	CMDLINE=" $(sudo cat "${WORK}/boot/cmdline.txt") "
+else
+	CMDLINE=" $(sudo sed -n 's/^set syncphony_cmdline="\(.*\)"$/\1/p' \
+		"${WORK}/root/usr/share/syncphony-box/x86/cmdline.cfg" 2>/dev/null) "
+fi
 for param in quiet splash loglevel=3 vt.global_cursor_default=0 consoleblank=0; do
 	if [ "${CMDLINE}" != "${CMDLINE/ ${param} /}" ]; then
 		check "cmdline has ${param}" ok
@@ -443,10 +506,12 @@ for param in quiet splash loglevel=3 vt.global_cursor_default=0 consoleblank=0; 
 	fi
 done
 
-if sudo grep -q '^disable_splash=1' "${WORK}/boot/config.txt"; then
-	check "config.txt has disable_splash=1" ok
-else
-	check "config.txt has disable_splash=1" "missing"
+if [ "${PLATFORM}" = pi ]; then
+	if sudo grep -q '^disable_splash=1' "${WORK}/boot/config.txt"; then
+		check "config.txt has disable_splash=1" ok
+	else
+		check "config.txt has disable_splash=1" "missing"
+	fi
 fi
 
 # --- read-only root (MAD-805) ------------------------------------------------
@@ -458,10 +523,13 @@ else
 	check "cmdline has boot=overlay" "missing"
 fi
 
-if [ "${CMDLINE}" != "${CMDLINE/ grow-data /}" ]; then
-	check "cmdline has grow-data" ok
-else
-	check "cmdline has grow-data" "missing"
+# The Pi grows /data on first boot; the x86 installer makes it full size.
+if [ "${PLATFORM}" = pi ]; then
+	if [ "${CMDLINE}" != "${CMDLINE/ grow-data /}" ]; then
+		check "cmdline has grow-data" ok
+	else
+		check "cmdline has grow-data" "missing"
+	fi
 fi
 
 case "${CMDLINE}" in
@@ -494,6 +562,20 @@ else
 	check "grow-data initramfs script installed executable" "missing"
 fi
 
+if sudo grep -q 'copy_exec /usr/sbin/e2fsck' "${WORK}/root/etc/initramfs-tools/hooks/syncphony-box" 2>/dev/null &&
+	sudo test -x "${WORK}/root/etc/initramfs-tools/hooks/syncphony-box"; then
+	check "initramfs hook carries e2fsck (the /data check)" ok
+else
+	check "initramfs hook carries e2fsck (the /data check)" "hook missing or wrong"
+fi
+
+if sudo grep -q '^ConditionKernelCommandLine=!boot=live$' \
+	"${WORK}/root/usr/lib/systemd/system/syncphony-update.service"; then
+	check "nightly update stays off in a live session" ok
+else
+	check "nightly update stays off in a live session" "no condition"
+fi
+
 resize_state="$(systemctl --root="${WORK}/root" is-enabled rpi-resize.service 2>/dev/null || true)"
 if [ "${resize_state}" != "enabled" ]; then
 	check "stock rpi-resize (root grow) disabled" ok
@@ -502,18 +584,26 @@ else
 fi
 
 # fstab: the boot partition is mounted read-only, and /data has its own
-# nofail entry pointing at partition 3 (the DATADEV placeholder resolved).
+# nofail entry (the DATADEV placeholder resolved): partition 3 on the Pi,
+# the label on the x86 live root. The installer writes an installed x86
+# box's fstab, so its lines are checked in the installer.
+if [ "${PLATFORM}" = pi ]; then
+	boot_fstab="${WORK}/root/etc/fstab"
+else
+	boot_fstab="${WORK}/root/usr/sbin/syncphony-install"
+fi
 if sudo grep -E '/boot/firmware[[:space:]]+vfat[[:space:]]+[^[:space:]]*ro' \
-	"${WORK}/root/etc/fstab" >/dev/null; then
+	"${boot_fstab}" >/dev/null; then
 	check "fstab mounts /boot/firmware read-only" ok
 else
 	check "fstab mounts /boot/firmware read-only" "no ro flag"
 fi
 
 data_fstab="$(sudo grep -E '/data[[:space:]]+ext4' "${WORK}/root/etc/fstab" || true)"
-case "${data_fstab}" in
-	PARTUUID=*-03*nofail*) check "fstab has the /data entry (partition 3, nofail)" ok ;;
-	*) check "fstab has the /data entry (partition 3, nofail)" "got: ${data_fstab:-nothing}" ;;
+case "${PLATFORM}:${data_fstab}" in
+	pi:PARTUUID=*-03*nofail*) check "fstab has the /data entry (partition 3, nofail)" ok ;;
+	x86:LABEL=syncphony-data*nofail*) check "fstab has the /data entry (by label, nofail)" ok ;;
+	*) check "fstab has the /data entry (nofail)" "got: ${data_fstab:-nothing}" ;;
 esac
 
 # Persistent paths resolve onto /data (docs/persistent-paths.md).
@@ -603,14 +693,23 @@ else
 	check "man pages and docs stripped (copyright kept)" "${man_files} man, ${doc_files} doc files left"
 fi
 
+# The Pi image under 1 GiB compressed (MAD-809). The ISO carries PC
+# firmware the Pi doesn't need; it must stay under 2 GiB, GitHub's
+# release asset limit.
 image_bytes="$(stat -c %s "${IMAGE_XZ}")"
-limit=$((1024 * 1024 * 1024))
-if [ "${image_bytes}" -le "${limit}" ]; then
-	check "compressed image under 1 GiB ($((image_bytes / 1024 / 1024)) MiB)" ok
+if [ "${PLATFORM}" = pi ]; then
+	limit_gib=1
 else
-	check "compressed image under 1 GiB" "$((image_bytes / 1024 / 1024)) MiB"
+	limit_gib=2
+fi
+limit=$((limit_gib * 1024 * 1024 * 1024))
+if [ "${image_bytes}" -le "${limit}" ]; then
+	check "image under ${limit_gib} GiB ($((image_bytes / 1024 / 1024)) MiB)" ok
+else
+	check "image under ${limit_gib} GiB" "$((image_bytes / 1024 / 1024)) MiB"
 fi
 
+if [ "${PLATFORM}" = pi ]; then
 # --- first user is locked (no password until Imager settings apply) ---------
 if sudo grep -q '^syncphony:!' "${WORK}/root/etc/shadow"; then
 	check "first user syncphony has locked password" ok
@@ -626,6 +725,109 @@ for file in user-data network-config meta-data; do
 		check "boot partition has ${file}" "missing"
 	fi
 done
+fi # pi
+
+# --- the x86 ISO (MAD-846, ADR 0013) ------------------------------------------
+if [ "${PLATFORM}" = x86 ]; then
+	ISO="${WORK}/iso"
+	GRUB_CFG="${ISO}/boot/grub/grub.cfg"
+
+	# One menu for BIOS and UEFI: the live box, and the installer.
+	live_entry="$(sudo grep -E '^[[:space:]]*linux[[:space:]]' "${GRUB_CFG}" 2>/dev/null | grep -v syncphony.install | head -n 1 || true)"
+	if has_tokens "${live_entry}" boot=live quiet loglevel=3 vt.global_cursor_default=0 consoleblank=0; then
+		check "ISO menu boots the live box quietly" ok
+	else
+		check "ISO menu boots the live box quietly" "got: ${live_entry:-no entry}"
+	fi
+	if sudo grep -qE '^[[:space:]]*linux[[:space:]].*boot=live.*syncphony\.install' "${GRUB_CFG}" 2>/dev/null; then
+		check "ISO menu has the Install to disk entry" ok
+	else
+		check "ISO menu has the Install to disk entry" "missing"
+	fi
+
+	if [ -n "$(sudo find "${ISO}" -ipath '*/efi/boot/bootx64.efi' 2>/dev/null | head -n 1)" ]; then
+		check "ISO boots on UEFI (EFI/BOOT/BOOTX64.EFI)" ok
+	else
+		check "ISO boots on UEFI (EFI/BOOT/BOOTX64.EFI)" "missing"
+	fi
+	if sudo test -d "${ISO}/boot/grub/i386-pc"; then
+		check "ISO boots on BIOS (grub i386-pc)" ok
+	else
+		check "ISO boots on BIOS (grub i386-pc)" "no boot/grub/i386-pc"
+	fi
+
+	initrd="$(sudo find "${ISO}/live" -maxdepth 1 -name 'initrd.img*' | head -n 1)"
+	if [ -n "${initrd}" ] && sudo test -n "$(sudo find "${ISO}/live" -maxdepth 1 -name 'vmlinuz*')"; then
+		check "ISO carries the kernel and initramfs" ok
+	else
+		check "ISO carries the kernel and initramfs" "missing in live/"
+	fi
+
+	# One initramfs serves both: live-boot's scripts for boot=live, the
+	# box's overlay (and the e2fsck it runs on /data) for boot=overlay.
+	if command -v lsinitramfs >/dev/null 2>&1 && [ -n "${initrd}" ]; then
+		contents="$(sudo lsinitramfs "${initrd}" 2>/dev/null || true)"
+		for want in scripts/live scripts/overlay e2fsck; do
+			# A here-string, not a pipe: grep -q quitting early would
+			# SIGPIPE the writer and fail the pipeline under pipefail.
+			if grep -q "${want}\$" <<< "${contents}"; then
+				check "initramfs has ${want}" ok
+			else
+				check "initramfs has ${want}" "missing"
+			fi
+		done
+	else
+		echo "NOTE: no lsinitramfs here; the initramfs contents go unchecked"
+	fi
+
+	if sudo test -x "${WORK}/root/usr/sbin/syncphony-install"; then
+		check "installer installed executable" ok
+	else
+		check "installer installed executable" "missing or not executable"
+	fi
+	for f in grub.cfg.in cmdline.cfg; do
+		if sudo test -f "${WORK}/root/usr/share/syncphony-box/x86/${f}"; then
+			check "installer template ${f} present" ok
+		else
+			check "installer template ${f} present" "missing"
+		fi
+	done
+	if sudo grep -q 'cmdline.cfg' "${WORK}/root/usr/share/syncphony-box/x86/grub.cfg.in" &&
+		sudo grep -q '@ROOT_UUID@' "${WORK}/root/usr/share/syncphony-box/x86/grub.cfg.in"; then
+		check "installed grub.cfg sources boxd's cmdline.cfg" ok
+	else
+		check "installed grub.cfg sources boxd's cmdline.cfg" "template wrong"
+	fi
+	for dir in i386-pc x86_64-efi; do
+		if sudo test -d "${WORK}/root/usr/lib/grub/${dir}"; then
+			check "GRUB ${dir} modules for the installer" ok
+		else
+			check "GRUB ${dir} modules for the installer" "missing"
+		fi
+	done
+
+	# The install boot runs the installer instead of the box, and mounts
+	# no /data (the disk being wiped may hold one).
+	for dropin in syncphony-kiosk.service.d boxd.service.d data.mount.d; do
+		if sudo grep -q '^ConditionKernelCommandLine=!syncphony.install$' \
+			"${WORK}/root/usr/lib/systemd/system/${dropin}/50-installer.conf" 2>/dev/null; then
+			check "${dropin%.d} stays off in the install boot" ok
+		else
+			check "${dropin%.d} stays off in the install boot" "drop-in missing or wrong"
+		fi
+	done
+
+	if [ "$(sudo cat "${WORK}/root/etc/hostname" 2>/dev/null)" = syncphony-box ]; then
+		check "hostname is syncphony-box" ok
+	else
+		check "hostname is syncphony-box" "got: $(sudo cat "${WORK}/root/etc/hostname" 2>/dev/null)"
+	fi
+	if [ ! -s "${WORK}/root/etc/machine-id" ]; then
+		check "machine-id empty (made per box)" ok
+	else
+		check "machine-id empty (made per box)" "baked in"
+	fi
+fi
 
 if [ "${failures}" -ne 0 ]; then
 	echo "${failures} check(s) failed" >&2

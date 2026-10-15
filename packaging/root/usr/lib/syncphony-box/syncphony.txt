@@ -1,10 +1,11 @@
 # Syncphony Box settings.
 #
-# This file sits on the SD card's boot partition, so you can edit it with
-# any computer: put the card in a card reader and open the small "bootfs"
-# drive. Lines are name=value; remove the leading "# " to turn an option
-# on, put the card back, and power the box on. Plain text only; CRLF line
-# endings are fine. Unknown lines are ignored.
+# This file sits on the box's boot partition, so you can edit it with
+# any computer: on a Pi, put the SD card in a card reader and open the
+# small "bootfs" drive (on a PC box it is the "SB-BOOT" partition). Lines
+# are name=value; remove the leading "# " to turn an option on, put the
+# card back, and power the box on. Plain text only; CRLF line endings are
+# fine. Unknown lines are ignored.
 #
 # The Syncphony server this box shows. Required.
 #server_url=https://syncphony.example.com

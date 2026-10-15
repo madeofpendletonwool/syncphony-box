@@ -12,7 +12,9 @@ record the CEC issue (MAD-807, ADR 0009) asked for.
 | Pi 5 | pending bench | HDMI0 is the port next to the USB-C power input; that port is `cec0` |
 | Pi 4 (2 GB+) | pending bench | HDMI0 is next to the power input too; the 3.5 mm jack makes `audio=analog` possible |
 
-Both ports: plugging into HDMI1 instead of HDMI0 means `audio=hdmi2` in
+| x86-64 PC (ISO, ADR 0013) | pending bench | VM-tested procedure in docs/testing.md; no CEC (PC GPUs can't send it); `audio=hdmi` is the first HDMI/DisplayPort output |
+
+Both Pi ports: plugging into HDMI1 instead of HDMI0 means `audio=hdmi2` in
 `syncphony.txt` (the box then claims `/dev/cec1`). Power: use the
 official power supply — under-voltage shows up as audio dropouts long
 before anything else (the watchdog's thermals log flags it; see ADR

@@ -1,0 +1,310 @@
+#!/bin/bash
+# syncphony-install: put this Syncphony Box on a disk (MAD-846, ADR 0013).
+#
+# The x86 ISO's "Install Syncphony Box to disk" boot entry runs this on
+# tty1 (syncphony-installer.service). It:
+#
+#   1. asks for a disk (never the one the live system booted from) and for
+#      a final yes, because everything on it is erased
+#   2. optionally asks for an admin user. A PC has no Imager to make one,
+#      and without one there is no login for SSH or maintenance.
+#   3. partitions it GPT: BIOS boot (1 MiB) + EFI system partition (FAT32,
+#      SB-BOOT, mounted at /boot/firmware like the Pi's boot partition) +
+#      root (ext4, syncphony-root) + data (ext4, syncphony-data, the rest)
+#   4. copies the live system's pristine root (the squashfs, not the
+#      running overlay) onto root, plus the kernel and initramfs when the
+#      squashfs doesn't carry them
+#   5. installs GRUB for UEFI (the removable-media path, so no NVRAM entry
+#      is needed) and legacy BIOS, with a grub.cfg that boots the root
+#      read-only behind the Pi's overlay (boot=overlay) and a cmdline.cfg
+#      that boxd rewrites for resolution= and rotate=
+#   6. lays out /data and puts syncphony.txt on the EFI partition
+#   7. reboots into the installed box
+#
+# Unattended (a scripted install in a VM, say): SB_INSTALL_DISK=/dev/vda
+# SB_INSTALL_YES=1, plus SB_INSTALL_USER and SB_INSTALL_PASSWORD for the
+# admin user. SB_INSTALL_SOURCE copies the root from a directory instead
+# of the live squashfs; SB_INSTALL_NO_REBOOT=1 stops before the reboot.
+set -euo pipefail
+
+SHARE=/usr/share/syncphony-box/x86
+TEMPLATE=/usr/lib/syncphony-box/syncphony.txt
+MEDIUM=/run/live/medium
+MNT=/run/syncphony-install
+ESP_MIB=256
+ROOT_MIN_MIB=4096
+DATA_MIN_MIB=1024
+
+UNATTENDED="${SB_INSTALL_YES:-}"
+
+# On tty1 the screen belongs to the dialogs: log to the journal there
+# (journalctl -t syncphony-install), to stderr when unattended.
+log() {
+	if [ -n "${UNATTENDED}" ]; then
+		echo "syncphony-install: $*" >&2
+	else
+		logger -t syncphony-install -- "$*" 2>/dev/null || true
+	fi
+}
+
+ui() {
+	whiptail --backtitle "Syncphony Box installer" "$@" 3>&1 1>&2 2>&3
+}
+
+die() {
+	log "$*"
+	if [ -z "${UNATTENDED}" ]; then
+		ui --title "Install failed" --msgbox "$*\n\nNothing was installed. Press Enter to restart." 14 72 || true
+		systemctl reboot || true
+	fi
+	exit 1
+}
+
+status() {
+	log "$*"
+	if [ -z "${UNATTENDED}" ]; then
+		ui --title "Installing" --infobox "$*" 8 72 || true
+	fi
+}
+
+cleanup() {
+	set +e
+	sync
+	for m in "${MNT}/root/boot/firmware" "${MNT}/root" "${MNT}/data" "${MNT}/src"; do
+		mountpoint -q "${m}" && umount "${m}"
+	done
+}
+trap cleanup EXIT
+
+# part DISK N: the device of partition N (sda -> sda2, nvme0n1 -> nvme0n1p2).
+part() {
+	case "$1" in
+	*[0-9]) echo "${1}p${2}" ;;
+	*) echo "${1}${2}" ;;
+	esac
+}
+
+# The disk the live system booted from, so it is never offered.
+live_disk() {
+	local src pk
+	src="$(findmnt -n -o SOURCE "${MEDIUM}" 2>/dev/null || true)"
+	[ -n "${src}" ] || return 0
+	pk="$(lsblk -no PKNAME "${src}" 2>/dev/null | head -n 1)"
+	if [ -n "${pk}" ]; then
+		echo "/dev/${pk}"
+	else
+		echo "${src}"
+	fi
+}
+
+[ "$(id -u)" -eq 0 ] || { echo "syncphony-install: run it as root" >&2; exit 1; }
+
+# --- the source: the live system's pristine root ----------------------------
+mkdir -p "${MNT}"
+if [ -n "${SB_INSTALL_SOURCE:-}" ]; then
+	SRC="${SB_INSTALL_SOURCE}"
+elif [ -d /run/live/rootfs/filesystem.squashfs/usr ]; then
+	SRC=/run/live/rootfs/filesystem.squashfs
+elif [ -f "${MEDIUM}/live/filesystem.squashfs" ]; then
+	mkdir -p "${MNT}/src"
+	mount -o loop,ro "${MEDIUM}/live/filesystem.squashfs" "${MNT}/src"
+	SRC="${MNT}/src"
+else
+	die "Can't find the live system to copy. Start the installer from the Syncphony Box USB stick or DVD."
+fi
+
+USED_MIB="$(du -sxm "${SRC}" | cut -f1)"
+# Room for the nightly updates (a new kernel while the old one is still
+# there, new Chromium builds) on top of what the image uses today.
+ROOT_MIB=$((USED_MIB * 2))
+[ "${ROOT_MIB}" -ge "${ROOT_MIN_MIB}" ] || ROOT_MIB="${ROOT_MIN_MIB}"
+NEED_MIB=$((1 + ESP_MIB + ROOT_MIB + DATA_MIN_MIB + 1))
+
+# --- the disk ------------------------------------------------------------------
+LIVE="$(live_disk)"
+candidates=()
+while read -r name size type ro model; do
+	case "${type}:${name}" in
+	disk:/dev/zram* | disk:/dev/sr*) continue ;;
+	disk:*) ;;
+	# A disk image, only when named outright (testing the installer).
+	loop:*) [ "${name}" = "${SB_INSTALL_DISK:-}" ] || continue ;;
+	*) continue ;;
+	esac
+	[ "${ro}" = 0 ] || continue
+	[ "${name}" != "${LIVE}" ] || continue
+	[ $((size / 1024 / 1024)) -ge "${NEED_MIB}" ] || continue
+	candidates+=("${name}" "$(numfmt --to=iec --suffix=B "${size}")  ${model:-disk}")
+done < <(lsblk -dnpb -o NAME,SIZE,TYPE,RO,MODEL)
+
+if [ -n "${SB_INSTALL_DISK:-}" ]; then
+	DISK="${SB_INSTALL_DISK}"
+	found=""
+	for ((i = 0; i < ${#candidates[@]}; i += 2)); do
+		if [ "${candidates[i]}" = "${DISK}" ]; then found=1; fi
+	done
+	[ -n "${found}" ] || die "${DISK} can't take the box: it is the boot medium, read-only, or smaller than ${NEED_MIB} MiB."
+else
+	[ "${#candidates[@]}" -gt 0 ] || die "No disk to install to. The box needs an internal disk of at least $((NEED_MIB / 1024 + 1)) GB besides the USB stick it booted from."
+	DISK="$(ui --title "Install Syncphony Box" --menu \
+		"Choose the disk to install the box on.\n\nEVERYTHING ON IT WILL BE ERASED." \
+		18 72 8 "${candidates[@]}")" || die "No disk chosen."
+fi
+
+if [ -z "${UNATTENDED}" ]; then
+	ui --title "Erase ${DISK}?" --defaultno --yesno \
+		"Everything on ${DISK} will be erased and replaced by Syncphony Box.\n\nThis can't be undone. Continue?" \
+		12 72 || die "Cancelled. ${DISK} was not touched."
+fi
+
+# Nothing on the target may be in use. (The installer's boot entry mounts
+# no /data at all for exactly this reason: reinstalling over an old box.)
+if lsblk -nro MOUNTPOINT "${DISK}" | grep -q .; then
+	die "${DISK} has mounted partitions ($(lsblk -nro MOUNTPOINT "${DISK}" | grep . | tr '\n' ' ')). Use the \"Install to disk\" boot entry."
+fi
+
+# --- the admin user (optional) ------------------------------------------------------
+ADMIN="${SB_INSTALL_USER:-}"
+PASSWORD="${SB_INSTALL_PASSWORD:-}"
+if [ -z "${UNATTENDED}" ]; then
+	while :; do
+		ADMIN="$(ui --title "Admin user (optional)" --inputbox \
+			"A user for SSH and maintenance (it gets sudo). The box itself needs no login.\n\nLeave it empty to skip." \
+			12 72 "")" || ADMIN=""
+		[ -n "${ADMIN}" ] || break
+		if ! [[ "${ADMIN}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || [ "${ADMIN}" = root ] || [ "${ADMIN}" = kiosk ]; then
+			ui --msgbox "\"${ADMIN}\" can't be a user name: lowercase letters, digits, - and _, starting with a letter." 10 72 || true
+			continue
+		fi
+		PASSWORD="$(ui --title "Password for ${ADMIN}" --passwordbox "Password:" 10 72)" || continue
+		again="$(ui --title "Password for ${ADMIN}" --passwordbox "Once more:" 10 72)" || continue
+		if [ -z "${PASSWORD}" ] || [ "${PASSWORD}" != "${again}" ]; then
+			ui --msgbox "The passwords were empty or didn't match. Try again." 8 72 || true
+			continue
+		fi
+		break
+	done
+fi
+if [ -n "${ADMIN}" ] && [ -z "${PASSWORD}" ]; then
+	die "An admin user needs a password (SB_INSTALL_PASSWORD)."
+fi
+
+# --- partitions ----------------------------------------------------------------------
+status "Partitioning ${DISK}..."
+wipefs -q -a "${DISK}"
+sfdisk -q --wipe always --wipe-partitions always "${DISK}" << EOF
+label: gpt
+size=1MiB, type=21686148-6449-6E6F-744E-656564454649, name="bios"
+size=${ESP_MIB}MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="SB-BOOT"
+size=${ROOT_MIB}MiB, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="syncphony-root"
+type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="syncphony-data"
+EOF
+udevadm settle
+P_ESP="$(part "${DISK}" 2)"
+P_ROOT="$(part "${DISK}" 3)"
+P_DATA="$(part "${DISK}" 4)"
+for _ in $(seq 20); do
+	[ -b "${P_DATA}" ] && break
+	sleep 0.5
+done
+[ -b "${P_DATA}" ] || die "The new partitions on ${DISK} didn't appear."
+
+mkfs.vfat -F 32 -n SB-BOOT "${P_ESP}" > /dev/null
+mkfs.ext4 -q -F -L syncphony-root "${P_ROOT}"
+mkfs.ext4 -q -F -L syncphony-data "${P_DATA}"
+ROOT_UUID="$(blkid -s UUID -o value "${P_ROOT}")"
+ESP_UUID="$(blkid -s UUID -o value "${P_ESP}")"
+DATA_UUID="$(blkid -s UUID -o value "${P_DATA}")"
+
+# --- the root ----------------------------------------------------------------------------
+status "Copying the system (${USED_MIB} MiB)..."
+mkdir -p "${MNT}/root" "${MNT}/data"
+mount "${P_ROOT}" "${MNT}/root"
+cp -a "${SRC}/." "${MNT}/root/"
+
+# The kernel and initramfs: the squashfs may not carry them (live-build
+# serves them from the medium). The initramfs on the medium is the one
+# the build made in the same chroot: live-boot's scripts plus the box's
+# overlay script, so it boots the installed root too.
+R="${MNT}/root"
+mkdir -p "${R}/boot"
+kernel="$(cd "${R}/boot" && ls vmlinuz-* 2>/dev/null | sort -V | tail -n 1 || true)"
+if [ -z "${kernel}" ]; then
+	kernel="vmlinuz-$(uname -r)"
+	cp "$(ls "${MEDIUM}"/live/vmlinuz* | head -n 1)" "${R}/boot/${kernel}"
+fi
+kver="${kernel#vmlinuz-}"
+if [ ! -f "${R}/boot/initrd.img-${kver}" ]; then
+	cp "$(ls "${MEDIUM}"/live/initrd.img* | head -n 1)" "${R}/boot/initrd.img-${kver}"
+fi
+# Debian's kernel packages keep these two links current on every update.
+ln -sfn "boot/${kernel}" "${R}/vmlinuz"
+ln -sfn "boot/initrd.img-${kver}" "${R}/initrd.img"
+
+cat > "${R}/etc/fstab" << EOF
+# Written by syncphony-install (MAD-846, ADR 0013). The initramfs mounts
+# the root read-only behind the overlay (boot=overlay) and mounts /data
+# itself; these lines are the rest of the system's view (ADR 0007).
+UUID=${ROOT_UUID}  /               ext4  defaults,noatime  0  1
+UUID=${ESP_UUID}   /boot/firmware  vfat  defaults,ro  0  2
+UUID=${DATA_UUID}  /data           ext4  defaults,nofail,x-systemd.device-timeout=15s  0  2
+EOF
+
+if [ -n "${ADMIN}" ]; then
+	status "Adding the admin user ${ADMIN}..."
+	useradd --root "${R}" --create-home --shell /bin/bash --groups sudo "${ADMIN}"
+	printf '%s:%s\n' "${ADMIN}" "${PASSWORD}" | chpasswd --root "${R}"
+fi
+
+# --- the boot partition: GRUB, the command line, syncphony.txt --------------------------
+status "Installing the bootloader..."
+B="${R}/boot/firmware"
+mkdir -p "${B}"
+mount "${P_ESP}" "${B}"
+GRUB_LOG=/run/syncphony-install-grub.log
+grub-install --target=x86_64-efi --efi-directory="${B}" --boot-directory="${B}" \
+	--removable --no-nvram >> "${GRUB_LOG}" 2>&1 ||
+	die "grub-install (UEFI) failed on ${DISK}: $(tail -n 3 "${GRUB_LOG}")"
+grub-install --target=i386-pc --boot-directory="${B}" "${DISK}" >> "${GRUB_LOG}" 2>&1 ||
+	die "grub-install (BIOS) failed on ${DISK}: $(tail -n 3 "${GRUB_LOG}")"
+sed "s/@ROOT_UUID@/${ROOT_UUID}/g" "${SHARE}/grub.cfg.in" > "${B}/grub/grub.cfg"
+cp "${SHARE}/cmdline.cfg" "${B}/cmdline.cfg"
+# The live session's syncphony.txt, if the setup screen already wrote one;
+# the commented-out template otherwise.
+if [ -f /boot/firmware/syncphony.txt ]; then
+	cp /boot/firmware/syncphony.txt "${B}/syncphony.txt"
+else
+	cp "${TEMPLATE}" "${B}/syncphony.txt"
+fi
+
+# --- /data ------------------------------------------------------------------------------
+# The persistent layout (docs/persistent-paths.md), with the Chromium
+# profile dir owned by the kiosk user. data-persist recreates anything
+# missing at boot; making it now makes the first boot persistent from the
+# start (same as scripts/add-data-partition.sh does for the Pi image).
+status "Preparing /data..."
+mount "${P_DATA}" "${MNT}/data"
+D="${MNT}/data"
+mkdir -p "${D}/chromium" "${D}/journal" "${D}/syncphony-box" "${D}/boxd" \
+	"${D}/system/cloud" "${D}/system/identity" "${D}/system/ssh" "${D}/system/network"
+kiosk_ids="$(awk -F: '$1 == "kiosk" { print $3 ":" $4 }' "${R}/etc/passwd")"
+[ -n "${kiosk_ids}" ] || die "The copied system has no kiosk user."
+chown "${kiosk_ids}" "${D}/chromium"
+# The new filesystem already fills the partition.
+touch "${D}/system/.grown"
+
+status "Finishing..."
+sync
+cleanup
+trap - EXIT
+
+log "installed on ${DISK}"
+if [ -n "${SB_INSTALL_NO_REBOOT:-}" ]; then
+	exit 0
+fi
+if [ -z "${UNATTENDED}" ]; then
+	ui --title "Syncphony Box is installed" --msgbox \
+		"Remove the USB stick (or DVD), then press Enter.\n\nThe box restarts from ${DISK} and shows its setup screen on the TV." \
+		12 72 || true
+fi
+systemctl reboot

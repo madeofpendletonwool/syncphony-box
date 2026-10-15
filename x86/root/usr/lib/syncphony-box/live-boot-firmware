@@ -1,0 +1,26 @@
+#!/bin/sh
+# The x86 live session's /boot/firmware (MAD-846, ADR 0013). On a Pi and
+# an installed PC box, /boot/firmware is the boot partition and holds
+# syncphony.txt. The live session has none, so:
+#
+#   - with /data (a syncphony-data partition on the stick), /boot/firmware
+#     is a bind mount of /data/boot-firmware: the setup screen's writes
+#     land on the stick and survive a reboot
+#   - without it, /boot/firmware stays on the RAM overlay with the
+#     template: the box works, and forgets its setup at power-off
+#
+# Run by syncphony-live-boot.service, before boxd reads the file.
+set -eu
+
+TEMPLATE=/usr/lib/syncphony-box/syncphony.txt
+mkdir -p /boot/firmware
+
+if mountpoint -q /data; then
+	mkdir -p /data/boot-firmware
+	[ -f /data/boot-firmware/syncphony.txt ] || cp "${TEMPLATE}" /data/boot-firmware/syncphony.txt
+	mountpoint -q /boot/firmware || mount --bind /data/boot-firmware /boot/firmware
+	echo "live-boot-firmware: syncphony.txt kept on /data"
+else
+	[ -f /boot/firmware/syncphony.txt ] || cp "${TEMPLATE}" /boot/firmware/syncphony.txt
+	echo "live-boot-firmware: no /data; syncphony.txt is in RAM for this session"
+fi

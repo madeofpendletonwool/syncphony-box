@@ -12,7 +12,8 @@
 # Never fails a boot: apply always exits 0. A missing server or a sink that
 # doesn't exist (yet) is a warning — the default sink is left alone until
 # the output appears and the monitor switches to it. PipeWire runs as the
-# kiosk user's user services (linger; enabled at image build by 04-audio).
+# kiosk user's user services (linger; enabled at image build by
+# rootfs/steps/10-audio.sh).
 #
 # Test hooks (unit defaults shown): SB_PACTL (pactl), SB_CONFIG_ENV
 # (/etc/syncphony-box/config.env), SB_SLEEP (sleep).
@@ -95,7 +96,10 @@ sink_block() {
 # against each sink's identifying text in order; the primary HDMI markers
 # are the vc4 driver's PCM names ("bcm2835 HDMI 1" = HDMI0, the port next
 # to USB-C power; "bcm2835 HDMI 2" = HDMI1) — the same on Pi 4 and Pi 5.
-# No silent wrong-port fallback: nothing matching means a warning upstream.
+# No silent wrong-port fallback on a Pi: nothing matching means a warning
+# upstream. A PC (the x86 box, MAD-846) has no fixed port names, so
+# there, and only where no vc4 sink exists at all, hdmi and hdmi2 are the
+# first and second built-in HDMI/DisplayPort sinks in PipeWire's order.
 pick_sink() {
 	audio=$1
 	data=$(sinks_data)
@@ -109,11 +113,13 @@ pick_sink() {
 			set -- 'bcm2835 hdmi 2' 'vc4-hdmi-1' 'hdmi1'
 			;;
 		analog)
-			# The Pi 4 jack (the Pi 5 has none); never a USB headset
-			# whose text also says "headphones".
+			# The Pi 4 jack (the Pi 5 has none), or a PC's built-in
+			# analog output; never a USB headset whose text also says
+			# "headphones".
 			printf '%s\n' "$data" | awk -F '\t' '
 				$2 != "usb" && (index($3, "headphone") ||
-					(index($3, "bcm2835") && !index($3, "hdmi"))) {
+					(index($3, "bcm2835") && !index($3, "hdmi")) ||
+					(index($3, "analog") && !index($3, "hdmi"))) {
 					print $1; exit
 				}
 			'
@@ -144,6 +150,17 @@ pick_sink() {
 			return 0
 		fi
 	done
+
+	# Not a Pi: the nth built-in HDMI/DisplayPort sink (n = 1 for hdmi,
+	# 2 for hdmi2).
+	case $data in
+		*bcm2835*|*vc4*) return 0 ;;
+	esac
+	n=1
+	[ "$audio" = hdmi2 ] && n=2
+	printf '%s\n' "$data" | awk -F '\t' -v n="$n" '
+		$2 != "usb" && index($3, "hdmi") && ++seen == n { print $1; exit }
+	'
 	return 0
 }
 

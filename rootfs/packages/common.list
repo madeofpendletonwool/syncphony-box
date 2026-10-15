@@ -1,0 +1,40 @@
+# Every box, Pi or x86 (MAD-846, ADR 0013). The platform lists add to it.
+
+# Kiosk stack: cage (Wayland kiosk compositor), chromium, and color emoji
+# for the room UI. Explicit DRI drivers so the GPU is usable by cage and
+# Chromium (pulls in Mesa even if a chromium dependency change would not).
+cage
+chromium
+fonts-noto-color-emoji
+libgl1-mesa-dri
+
+# mDNS: the box advertises <hostname>.local (set from name= in
+# syncphony.txt), which the setup screen's QR code points phones at.
+avahi-daemon
+
+# The kiosk wrapper probes boxd with curl; boxd checks the server's
+# /healthz (including over HTTPS) before the kiosk navigates.
+curl
+ca-certificates
+
+# Audio stack: PipeWire with its PulseAudio compatibility layer. Chromium
+# plays through pipewire-pulse, and audio-setup selects the sink with
+# pactl (ADR 0004). alsa-utils: aplay for the hardware checklist.
+pipewire
+pipewire-bin
+pipewire-alsa
+pipewire-pulse
+wireplumber
+pulseaudio-utils
+alsa-utils
+
+# Watchdogs (MAD-806, ADR 0008): a sane clock before the kiosk starts.
+systemd-timesyncd
+
+# HDMI-CEC (MAD-807, ADR 0009): cec-ctl talks to the kernel CEC framework.
+v4l-utils
+
+# The Wi-Fi setup hotspot (MAD-808, ADR 0010): NetworkManager runs the
+# access point, and its shared mode needs dnsmasq-base for DHCP and DNS.
+network-manager
+dnsmasq-base
