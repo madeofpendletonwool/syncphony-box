@@ -153,6 +153,17 @@ func (d *Daemon) watch() {
 			// fault. (Thermals run in their own loop regardless.)
 			continue
 		}
+		// CEC housekeeping (MAD-807): the optional good-night — a TV the
+		// box switched on goes to standby once the room has been idle
+		// for the configured minutes. Off unless cec_standby=on.
+		d.mu.Lock()
+		ev, evAt := d.lastEvent, d.lastEventAt
+		d.mu.Unlock()
+		if ev == "idle" && !evAt.IsZero() {
+			d.cec.Housekeeping(time.Since(evAt))
+		} else {
+			d.cec.Housekeeping(0)
+		}
 		ok := d.serverReachable()
 		now := time.Now()
 		d.mu.Lock()

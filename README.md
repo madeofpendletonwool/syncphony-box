@@ -70,8 +70,8 @@ and serves the box's own screens:
   your Syncphony server's address, and Save — boxd checks the server's
   `/healthz`, writes it to `syncphony.txt` (still the single source of
   truth), and restarts the kiosk into your server's pairing screen. That
-  listener is on the LAN only while the box is unconfigured (later, or for
-  10 minutes after a long OK press once the remote lands in stage 3), and
+  listener is on the LAN only while the box is unconfigured (or for the
+  10 minutes after a long OK press on the TV remote), and
   it never offers anything beyond the URL and the box's name.
 - **Offline.** The kiosk never navigates straight at the server: it opens a
   local start page that checks `/healthz` first. If the server can't be
@@ -82,6 +82,30 @@ and serves the box's own screens:
   alive) and moves the TV to the offline screen after a couple of minutes.
 
 Logs go to journald: `journalctl -u boxd -u syncphony-kiosk`.
+
+## The TV remote (HDMI-CEC)
+
+The box talks CEC through the kernel framework (`cec-ctl`), not libcec —
+see [ADR 0009](docs/adr/0009-hdmi-cec.md). Three behaviors, all under
+`cec=` in `syncphony.txt`:
+
+- **Wake and switch.** When music starts, a TV in standby (or on another
+  input) gets *Image View On* + *Active Source* — queue a song from the
+  couch and the room turns itself on. Rate-limited to once per playback
+  start and once every 5 minutes, so it never fights whoever switched to
+  the game console.
+- **The remote's keys.** Arrows, OK, Back and Play/Pause on the TV remote
+  become keyboard events (injected through uinput) — `/tv` already knows
+  them: arrows steer the visuals, right skips, OK clicks (the "Play here
+  instead" button is focused, so OK takes over as speaker), Play/Pause
+  plays and pauses. Holding **OK for 3 seconds** opens the setup window
+  and shows the box's IP and version on the TV.
+- **Optional standby.** `cec_standby=on` puts a TV the box switched on
+  (and nobody has taken away since) into standby after the room has been
+  idle for `cec_standby_minutes` (default 30). Off by default.
+
+CEC support varies wildly by TV brand — what works where is recorded in
+[docs/hardware.md](docs/hardware.md).
 
 ## The kiosk session
 
@@ -253,7 +277,9 @@ the box from booting; bad values are logged and fall back to defaults.
 | `audio` | `hdmi`, `hdmi2`, `analog`, `usb` | `hdmi` | where the sound goes (`analog` is the Pi 4's jack — a Pi 5 has none; use `usb` for a DAC) |
 | `resolution` | e.g. `1920x1080@60` | auto | forces the HDMI mode (takes a reboot; the box reboots once on its own) |
 | `rotate` | `0`, `90`, `180`, `270` | `0` | rotates the screen (takes a reboot) |
-| `cec` | `on`, `off` | `on` | switch the TV's input when music starts |
+| `cec` | `on`, `off` | `on` | switch the TV's input when music starts (HDMI-CEC; the remote's keys drive the box too — [docs/hardware.md](docs/hardware.md) for the TV matrix) |
+| `cec_standby` | `on`, `off` | `off` | put the TV in standby once the room has been idle (only ever a TV the box switched on itself) |
+| `cec_standby_minutes` | `1`–`240` | `30` | how many idle minutes before that standby |
 
 On every boot, `syncphony-box-config.service` runs `boxd config apply`:
 it parses the file into `config.env` (kept on `/data`; `/etc/syncphony-box/config.env`
@@ -298,6 +324,11 @@ has its own page: [docs/testing.md](docs/testing.md).
 - `aplay /usr/share/sounds/alsa/Front_Center.wav` (or `pw-play` on the same
   file) plays the test tone from the chosen output, on both a Pi 4 and a
   Pi 5.
+- HDMI-CEC ([docs/testing.md](docs/testing.md), "The CEC gauntlet"): a
+  TV in standby wakes and switches when a song is queued; the remote's
+  keys drive `/tv`; a 3-second OK shows the box's IP and version; the
+  box never fights a hand-switch to another input. Record the TV in
+  [docs/hardware.md](docs/hardware.md).
 - `pactl info` shows the expected `Default Sink` for each `audio=` value —
   set it on the card, boot, check, and confirm the sink is at 100%.
 - Cold boot with the TV **off**: turn the TV on, pair with audio — sound
@@ -348,8 +379,9 @@ has its own page: [docs/testing.md](docs/testing.md).
 ```
 pi-gen/               pi-gen submodule (pinned, never edited)
 stage-syncphony/      custom pi-gen stage (packages, kiosk session,
-                      read-only root, ...)
-boxd/                 the box's Go helper daemon (bridge, config, screens)
+                      read-only root, CEC, ...)
+boxd/                 the box's Go helper daemon (bridge, config, screens,
+                      watchdogs, CEC)
 config                pi-gen build configuration
 build.sh              wraps pi-gen's build-docker.sh (builds boxd first,
                       then appends the /data partition after export)
@@ -360,6 +392,7 @@ tests/                bats tests pinning the syncphony.txt and /data
                       behavior (used by CI)
 docs/adr/             architecture decision records
 docs/persistent-paths.md  the list of everything that survives a power cut
+docs/hardware.md      tested boards and the TV CEC compatibility matrix
 docs/testing.md       the hardware test procedures (power pulls & co)
 ```
 

@@ -17,13 +17,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/cec"
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/config"
 )
 
 const (
 	bridgeAddr   = "127.0.0.1:8099" // ADR 0016: loopback only
 	lanAddr      = ":80"            // the setup form, open only while unconfigured
-	setupWindow  = 10 * time.Minute // after SIGUSR1 (stage 3 wires the OK long-press)
+	setupWindow  = 10 * time.Minute // after SIGUSR1 or a long OK press on the remote
+	infoWindow   = 30 * time.Second // how long the info screen holds the TV after that press
 	healthzCache = 2 * time.Second
 
 	// Pairing durability (MAD-804, ADR 0006): Chromium writes its cookie
@@ -84,8 +86,12 @@ type Daemon struct {
 	// feed readings without a Pi.
 	vcgencmd func(args ...string) (string, error)
 
-	startedAt      time.Time   // boxd start; watchdog graces count from here
-	setupUntil     time.Time   // LAN setup window open until then (zero = closed)
+	startedAt      time.Time // boxd start; watchdog graces count from here
+	setupUntil     time.Time // LAN setup window open until then (zero = closed)
+	infoUntil      time.Time // the info screen holds /start until then (zero = off)
+	cec            *cec.Controller
+	cecUp          bool        // the CEC adapters registered; drives /v1/info's capabilities
+	wakeTV         func()      // the CEC wake-and-switch; a func field so tests can count calls
 	lastBeat       time.Time   // last /v1/heartbeat from the page
 	lastEvent      string      // last /v1/events type (the nightly reload waits out "playing")
 	lastEventAt    time.Time   // when it arrived
@@ -115,7 +121,21 @@ func New(version string, log *log.Logger, run config.RunCommand) *Daemon {
 		},
 	}
 	d.reloadConfig()
+	d.cec = cec.New(d.cecConfig(d.cfg), log, d.onRemoteLongPress)
+	d.wakeTV = d.cec.WakeAndSwitch
 	return d
+}
+
+// cecConfig is the CEC slice of syncphony.txt for the controller, built
+// once at startup (cec= and its neighbors are boot settings; a change
+// lands on the next boot, like resolution=).
+func (d *Daemon) cecConfig(cfg config.Config) cec.Config {
+	return cec.Config{
+		Enabled:      cfg.CEC == "on",
+		SecondHDMI:   cfg.Audio == "hdmi2",
+		Standby:      cfg.CECStandby == "on",
+		StandbyAfter: time.Duration(cfg.CECStandbyMinutes) * time.Minute,
+	}
 }
 
 // reloadConfig re-reads syncphony.txt and updates everything derived from
@@ -199,6 +219,14 @@ func (d *Daemon) Run() error {
 	d.log.Printf("boxd: %s bridge on http://%s (server: %s)", d.version, bridgeAddr, d.serverOrNone())
 	go d.watch()
 	go d.sampleThermalsLoop()
+	go func() {
+		// CEC (MAD-807): register as a playback device on the adapters
+		// and watch the bus. cec=off or no /dev/cec leaves this inert.
+		n := d.cec.Start()
+		d.mu.Lock()
+		d.cecUp = n > 0
+		d.mu.Unlock()
+	}()
 
 	sig := make(chan os.Signal, 4)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1, syscall.SIGUSR2)
@@ -248,6 +276,29 @@ func (d *Daemon) closeSetupWindow() {
 	d.mu.Lock()
 	d.setupUntil = time.Time{}
 	d.mu.Unlock()
+}
+
+// onRemoteLongPress is the box's one remote gesture (MAD-807): OK held
+// for 3 seconds on the TV remote. It opens the setup window — the phone
+// form at http://<hostname>.local — and puts the box's IP and version on
+// the TV by restarting the kiosk onto the info screen; the page goes back
+// to the room by itself (and the speaker resumes, MAD-804).
+func (d *Daemon) onRemoteLongPress() {
+	now := time.Now()
+	d.mu.Lock()
+	d.setupUntil = now.Add(setupWindow)
+	d.infoUntil = now.Add(infoWindow)
+	d.mu.Unlock()
+	d.log.Printf("boxd: cec: OK long-press: setup window open for %s; showing box info", setupWindow)
+	d.restartKiosk("box info (OK long press)", false)
+}
+
+// infoWindowOpen reports whether /start should show the box's info
+// screen instead of connecting (the long-press set it).
+func (d *Daemon) infoWindowOpen() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return time.Now().Before(d.infoUntil)
 }
 
 func (d *Daemon) windowState() string {

@@ -1,0 +1,5 @@
+# HDMI-CEC and the remote's keys (MAD-807): the CEC adapters and the
+# uinput keyboard boxd injects through belong to this group — access comes
+# from this rule, not from boxd's root.
+KERNEL=="cec[0-9]*", GROUP="cec", MODE="0660"
+KERNEL=="uinput", GROUP="cec", MODE="0660"

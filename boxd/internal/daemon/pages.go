@@ -82,6 +82,81 @@ type startScreenData struct {
 	Network string
 }
 
+type infoScreenData struct {
+	Name    string
+	Version string
+	Server  string
+	Target  string
+	IPs     []string
+	Network string
+}
+
+// infoScreenHTML is what a 3-second OK hold on the TV remote shows
+// (MAD-807): the box's name, version, IPs and server, big enough to read
+// from the couch, while the setup window is open for a phone. It holds
+// the TV for a few seconds, then navigates to the room the same way the
+// start screen does.
+func infoScreenHTML(d infoScreenData) string {
+	targetJS, err := json.Marshal(d.Target)
+	if err != nil {
+		targetJS = []byte(`""`)
+	}
+	b := &strings.Builder{}
+	t := template.Must(template.New("info").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Syncphony Box — info</title>
+<style>` + pageStyle + `
+	.count { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+	<h1>{{.Name}}</h1>
+	<p>Syncphony Box <b>{{.Version}}</b></p>
+	{{if .IPs}}<p class="dim">On this network: {{range .IPs}}<code>{{.}}</code> {{end}}</p>{{end}}
+	<p class="dim">Showing <b>{{.Server}}</b> · network: {{.Network}}</p>
+	<p class="dim">Setup is open for ten minutes: set this box from a phone on
+	<code>{{.SetupURL}}</code></p>
+	<p class="dim">Back to the room in <span class="count" id="count">8</span></p>
+</main>
+<script>
+	const target = {{.TargetJS}};
+	const count = document.getElementById('count');
+	let left = 8;
+	let checking = false;
+	setInterval(() => {
+		if (checking) return;
+		left--;
+		count.textContent = Math.max(left, 0);
+		if (left <= 0) { checking = true; check(); }
+	}, 1000);
+	async function check() {
+		try {
+			const r = await fetch('/status', { cache: 'no-store' });
+			const s = await r.json();
+			if (s.reachable && s.target) { location.replace(s.target); return; }
+		} catch (e) { /* boxd hiccup: try again */ }
+		checking = false;
+		left = 5;
+	}
+</script>
+</body>
+</html>`))
+	t.Execute(b, struct {
+		Name     string
+		Version  string
+		Server   string
+		SetupURL string
+		TargetJS template.JS
+		IPs      []string
+		Network  string
+	}{d.Name, d.Version, d.Server, "http://" + hostname() + ".local", template.JS(targetJS), d.IPs, d.Network})
+	return b.String()
+}
+
 type storageScreenData struct {
 	Name string
 	IPs  []string

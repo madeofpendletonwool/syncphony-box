@@ -19,7 +19,9 @@
 # pointing at /data, and the stock root-resize replaced by the data grow;
 # and the self-healing pieces are wired: the systemd hardware watchdog
 # drop-in, timesyncd enabled and ordered before the kiosk, and vcgencmd
-# for boxd's thermals.
+# for boxd's thermals. The HDMI-CEC pieces are in place too: cec-ctl
+# installed, the cec group with its udev rule for /dev/cec* and
+# /dev/uinput, boxd granted the group, and uinput loaded at boot.
 
 set -euo pipefail
 
@@ -97,7 +99,7 @@ fi
 # --- packages ---------------------------------------------------------------
 for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi-daemon \
 	pipewire pipewire-bin pipewire-alsa pipewire-pulse wireplumber pulseaudio-utils alsa-utils \
-	libraspberrypi-bin systemd-timesyncd; do
+	libraspberrypi-bin systemd-timesyncd v4l-utils; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -277,6 +279,41 @@ else
 	check "vcgencmd installed (thermals)" "missing or not executable"
 fi
 
+# --- HDMI-CEC (MAD-807) --------------------------------------------------------
+if sudo test -x "${WORK}/root/usr/bin/cec-ctl"; then
+	check "cec-ctl installed (CEC)" ok
+else
+	check "cec-ctl installed (CEC)" "missing or not executable"
+fi
+
+if sudo grep -q '^cec:' "${WORK}/root/etc/group"; then
+	check "cec group exists" ok
+else
+	check "cec group exists" "missing"
+fi
+
+if sudo grep -q 'KERNEL=="uinput", GROUP="cec"' \
+	"${WORK}/root/etc/udev/rules.d/60-syncphony-cec.rules" &&
+	sudo grep -q 'KERNEL=="cec\[0-9\]\*", GROUP="cec"' \
+	"${WORK}/root/etc/udev/rules.d/60-syncphony-cec.rules"; then
+	check "udev rule grants cec and uinput to the group" ok
+else
+	check "udev rule grants cec and uinput to the group" "rule missing or wrong"
+fi
+
+if sudo grep -q '^SupplementaryGroups=cec' \
+	"${WORK}/root/etc/systemd/system/boxd.service.d/50-cec.conf"; then
+	check "boxd holds the cec group" ok
+else
+	check "boxd holds the cec group" "drop-in missing or wrong"
+fi
+
+if sudo grep -q '^uinput$' "${WORK}/root/etc/modules-load.d/syncphony-cec.conf"; then
+	check "uinput loaded at boot" ok
+else
+	check "uinput loaded at boot" "modules-load entry missing"
+fi
+
 # The boot config apply is boxd now: same unit, new engine.
 if sudo grep -q '^ExecStart=/usr/lib/syncphony-box/boxd config apply$' \
 	"${WORK}/root/etc/systemd/system/syncphony-box-config.service"; then
@@ -311,7 +348,7 @@ else
 	check "syncphony.txt ships fully commented out" "active lines: ${active}"
 fi
 
-for key in server_url name audio resolution rotate cec; do
+for key in server_url name audio resolution rotate cec cec_standby cec_standby_minutes; do
 	if sudo grep -q "^#${key}=" "${WORK}/boot/syncphony.txt"; then
 		check "syncphony.txt documents ${key}" ok
 	else

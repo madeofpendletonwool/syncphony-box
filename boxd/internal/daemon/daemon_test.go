@@ -98,6 +98,33 @@ func TestInfo(t *testing.T) {
 	}
 }
 
+func TestInfoCapabilityCECOnlyWhenUp(t *testing.T) {
+	hasCEC := func(t *testing.T, d *Daemon) bool {
+		t.Helper()
+		var info struct {
+			Capabilities []string `json:"capabilities"`
+		}
+		rec := get(t, d.bridgeMux(), "/v1/info")
+		json.Unmarshal(rec.Body.Bytes(), &info)
+		for _, c := range info.Capabilities {
+			if c == "cec" {
+				return true
+			}
+		}
+		return false
+	}
+	d, _ := newTestDaemon(t, "server_url=https://s.example\n")
+	if hasCEC(t, d) {
+		t.Fatal("cec must not be claimed before the adapters registered")
+	}
+	d.mu.Lock()
+	d.cecUp = true
+	d.mu.Unlock()
+	if !hasCEC(t, d) {
+		t.Fatal("cec should be a capability once the adapters are up")
+	}
+}
+
 func TestEventsAcceptedAndRejected(t *testing.T) {
 	d, _ := newTestDaemon(t, "server_url=https://s.example\n")
 	mux := d.bridgeMux()
@@ -180,6 +207,56 @@ func TestPlayingFlushesOncePerStartAndRateLimited(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if got := syncs(); got != before {
 		t.Fatalf("rate limit failed: %d extra syncs", got-before)
+	}
+}
+
+// countingWakes swaps the daemon's CEC wake for a counter (MAD-807): the
+// TV wake must fire once per playback start — not per repeat of the
+// playing event — and never for other events.
+func countingWakes(d *Daemon) func() int {
+	var mu sync.Mutex
+	n := 0
+	d.mu.Lock()
+	d.wakeTV = func() {
+		mu.Lock()
+		n++
+		mu.Unlock()
+	}
+	d.mu.Unlock()
+	return func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return n
+	}
+}
+
+func TestPlayingWakesTheTVOncePerStart(t *testing.T) {
+	d, _ := newTestDaemon(t, "server_url=https://s.example\n")
+	wakes := countingWakes(d)
+	mux := d.bridgeMux()
+
+	post(t, mux, "/v1/events", `{"type":"playing","roomId":"r1"}`)
+	waitFor(t, func() bool { return wakes() == 1 })
+
+	// A repeat of playing is not a new start.
+	time.Sleep(20 * time.Millisecond)
+	post(t, mux, "/v1/events", `{"type":"playing","roomId":"r1"}`)
+	time.Sleep(50 * time.Millisecond)
+	if got := wakes(); got != 1 {
+		t.Fatalf("repeat playing woke %d times", got)
+	}
+
+	// Pause, then play again: a new start.
+	post(t, mux, "/v1/events", `{"type":"paused"}`)
+	post(t, mux, "/v1/events", `{"type":"playing","roomId":"r1"}`)
+	waitFor(t, func() bool { return wakes() == 2 })
+
+	// Other events never wake.
+	post(t, mux, "/v1/events", `{"type":"idle"}`)
+	post(t, mux, "/v1/events", `{"type":"paired"}`)
+	time.Sleep(50 * time.Millisecond)
+	if got := wakes(); got != 2 {
+		t.Fatalf("wakes: %d", got)
 	}
 }
 
@@ -273,6 +350,39 @@ func TestRebootAndReloadRunSystemctl(t *testing.T) {
 }
 
 // --- screens ----------------------------------------------------------------
+
+// TestRemoteLongPressOpensSetupAndShowsInfo: the box's one remote gesture
+// (MAD-807). A 3-second OK hold opens the LAN setup window and puts the
+// box's IP and version on the TV via the info screen on /start.
+func TestRemoteLongPressOpensSetupAndShowsInfo(t *testing.T) {
+	d, rec := newTestDaemon(t, "server_url=https://s.example\nname=Den TV\n")
+	d.onRemoteLongPress()
+
+	if !d.setupWindowOpen() {
+		t.Fatal("setup window not open after the long press")
+	}
+	waitFor(t, func() bool {
+		return strings.Contains(strings.Join(rec.calls(), ";"), "systemctl restart syncphony-kiosk.service")
+	})
+
+	body := get(t, d.bridgeMux(), "/start").Body.String()
+	for _, want := range []string{"Den TV", "test-version"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("info screen should show %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestInfoScreenYieldsBackToStart(t *testing.T) {
+	d, _ := newTestDaemon(t, "server_url=https://s.example\n")
+	d.mu.Lock()
+	d.infoUntil = time.Now().Add(-time.Second)
+	d.mu.Unlock()
+	body := get(t, d.bridgeMux(), "/start").Body.String()
+	if !strings.Contains(body, "Connecting to") {
+		t.Fatalf("the ordinary start screen should be back: %s", body[:min(200, len(body))])
+	}
+}
 
 func TestStartScreenRedirectsToSetupWhenUnconfigured(t *testing.T) {
 	d, _ := newTestDaemon(t, "")
