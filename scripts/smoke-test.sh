@@ -768,7 +768,9 @@ if [ "${PLATFORM}" = x86 ]; then
 	if command -v lsinitramfs >/dev/null 2>&1 && [ -n "${initrd}" ]; then
 		contents="$(sudo lsinitramfs "${initrd}" 2>/dev/null || true)"
 		for want in scripts/live scripts/overlay e2fsck; do
-			if printf '%s\n' "${contents}" | grep -q "${want}\$"; then
+			# A here-string, not a pipe: grep -q quitting early would
+			# SIGPIPE the writer and fail the pipeline under pipefail.
+			if grep -q "${want}\$" <<< "${contents}"; then
 				check "initramfs has ${want}" ok
 			else
 				check "initramfs has ${want}" "missing"

@@ -15,11 +15,14 @@ if [ ! -f files/syncphony-box.deb ] || [ ! -x files/rootfs/customise.sh ]; then
 	exit 1
 fi
 
-rm -rf "${ROOTFS_DIR}/tmp/syncphony-rootfs"
-cp -a files/rootfs "${ROOTFS_DIR}/tmp/syncphony-rootfs"
-install -v -m 0644 files/syncphony-box.deb "${ROOTFS_DIR}/tmp/syncphony-rootfs/syncphony-box.deb"
+# Not under /tmp: on_chroot mounts a fresh tmpfs there the first time it
+# runs in a stage, which would hide anything copied in before.
+STAGED="${ROOTFS_DIR}/root/syncphony-rootfs"
+rm -rf "${STAGED}"
+cp -a files/rootfs "${STAGED}"
+install -v -m 0644 files/syncphony-box.deb "${STAGED}/syncphony-box.deb"
 
 on_chroot << EOF
-/tmp/syncphony-rootfs/customise.sh pi /tmp/syncphony-rootfs/syncphony-box.deb
-rm -rf /tmp/syncphony-rootfs
+/root/syncphony-rootfs/customise.sh pi /root/syncphony-rootfs/syncphony-box.deb
+rm -rf /root/syncphony-rootfs
 EOF
