@@ -151,7 +151,8 @@ fi
 # shellcheck disable=SC2086 # the platform lists split on purpose
 for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri avahi-daemon \
 	pipewire pipewire-bin pipewire-alsa pipewire-pulse wireplumber pulseaudio-utils alsa-utils \
-	systemd-timesyncd v4l-utils network-manager dnsmasq-base syncphony-box ${platform_pkgs}; do
+	systemd-timesyncd v4l-utils network-manager dnsmasq-base wpasupplicant wireless-regdb \
+	syncphony-box ${platform_pkgs}; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -584,9 +585,10 @@ else
 fi
 
 # fstab: the boot partition is mounted read-only, and /data has its own
-# nofail entry (the DATADEV placeholder resolved): partition 3 on the Pi,
-# the label on the x86 live root. The installer writes an installed x86
-# box's fstab, so its lines are checked in the installer.
+# nofail entry (the DATADEV placeholder resolved) on the Pi. The x86 live
+# root has none: the live session mounts /data itself (a missing label in
+# fstab stalls the boot), and the installer writes an installed box's
+# fstab, so its lines are checked in the installer.
 if [ "${PLATFORM}" = pi ]; then
 	boot_fstab="${WORK}/root/etc/fstab"
 else
@@ -602,7 +604,7 @@ fi
 data_fstab="$(sudo grep -E '/data[[:space:]]+ext4' "${WORK}/root/etc/fstab" || true)"
 case "${PLATFORM}:${data_fstab}" in
 	pi:PARTUUID=*-03*nofail*) check "fstab has the /data entry (partition 3, nofail)" ok ;;
-	x86:LABEL=syncphony-data*nofail*) check "fstab has the /data entry (by label, nofail)" ok ;;
+	x86:) check "live fstab has no /data entry (the live session mounts it)" ok ;;
 	*) check "fstab has the /data entry (nofail)" "got: ${data_fstab:-nothing}" ;;
 esac
 
@@ -780,6 +782,15 @@ if [ "${PLATFORM}" = x86 ]; then
 		echo "NOTE: no lsinitramfs here; the initramfs contents go unchecked"
 	fi
 
+	# The live session mounts /data itself (the stick's partition, or a
+	# tmpfs), and never the real one in the install boot.
+	if sudo test -x "${WORK}/root/usr/lib/syncphony-box/live-session" &&
+		sudo grep -q 'syncphony.install' "${WORK}/root/usr/lib/syncphony-box/live-session"; then
+		check "live session mounts /data (tmpfs in the install boot)" ok
+	else
+		check "live session mounts /data (tmpfs in the install boot)" "live-session missing or wrong"
+	fi
+
 	if sudo test -x "${WORK}/root/usr/sbin/syncphony-install"; then
 		check "installer installed executable" ok
 	else
@@ -806,9 +817,8 @@ if [ "${PLATFORM}" = x86 ]; then
 		fi
 	done
 
-	# The install boot runs the installer instead of the box, and mounts
-	# no /data (the disk being wiped may hold one).
-	for dropin in syncphony-kiosk.service.d boxd.service.d data.mount.d; do
+	# The install boot runs the installer instead of the box.
+	for dropin in syncphony-kiosk.service.d boxd.service.d; do
 		if sudo grep -q '^ConditionKernelCommandLine=!syncphony.install$' \
 			"${WORK}/root/usr/lib/systemd/system/${dropin}/50-installer.conf" 2>/dev/null; then
 			check "${dropin%.d} stays off in the install boot" ok

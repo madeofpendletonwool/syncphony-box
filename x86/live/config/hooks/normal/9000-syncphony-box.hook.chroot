@@ -9,14 +9,15 @@ set -euo pipefail
 /root/syncphony-rootfs/customise.sh x86 /root/syncphony-rootfs/syncphony-box.deb
 rm -rf /root/syncphony-rootfs
 
-# /data by label: the live session finds a syncphony-data partition on the
-# stick this way. A short timeout, because a stick without one is normal
-# here and the box waits for the mount before boxd starts. The installer
-# writes its own fstab with UUIDs.
-sed -i 's|^DATADEV[[:space:]].*|LABEL=syncphony-data  /data  ext4  defaults,nofail,x-systemd.device-timeout=5s  0  2|' /etc/fstab
+# No /data line in the live image's fstab: a stick without a
+# syncphony-data partition is normal here, and a fstab entry for a
+# missing label stalls the boot on a device timeout and a failed fsck.
+# The live session mounts /data itself (syncphony-live-boot.service). The
+# installer writes an installed box's fstab, /data by UUID, from scratch.
+sed -i '/^DATADEV[[:space:]]/d' /etc/fstab
 
-# The image-only units (x86/root): the live session's /boot/firmware and
-# the installer's boot entry.
+# The image-only units (x86/root): the live session's /data and
+# /boot/firmware, and the installer's boot entry.
 systemctl enable syncphony-live-boot.service syncphony-installer.service
 
 echo syncphony-box > /etc/hostname

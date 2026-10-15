@@ -35,6 +35,13 @@ func (d *Daemon) bridgeMux() *http.ServeMux {
 	mux.HandleFunc("GET /start", d.handleStartScreen)
 	mux.HandleFunc("GET /storage", d.handleStorageScreen)
 	mux.HandleFunc("GET /hotspot", d.handleHotspotScreen)
+	// The TV's own Wi-Fi controls (the setup and hotspot screens' buttons,
+	// and the on-screen network picker).
+	mux.HandleFunc("GET /wifi", screenOnly(d.handleWiFiScreen))
+	mux.HandleFunc("POST /wifi/hotspot", screenOnly(d.handleWiFiHotspotNow))
+	mux.HandleFunc("POST /wifi/scan", screenOnly(d.handleWiFiScan))
+	mux.HandleFunc("POST /wifi/join", screenOnly(d.handleWiFiJoin))
+	mux.HandleFunc("POST /wifi/hold", screenOnly(d.handleWiFiHold))
 	return mux
 }
 

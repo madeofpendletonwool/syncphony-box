@@ -36,5 +36,12 @@ v4l-utils
 
 # The Wi-Fi setup hotspot (MAD-808, ADR 0010): NetworkManager runs the
 # access point, and its shared mode needs dnsmasq-base for DHCP and DNS.
+# NetworkManager only Recommends wpasupplicant, and packages go in with
+# --no-install-recommends: without it NetworkManager can't scan, join or
+# run an access point at all. wireless-regdb gives the radio its
+# regulatory channels. Raspberry Pi OS Lite brings both; a bare Debian
+# root (the x86 box) doesn't.
 network-manager
 dnsmasq-base
+wpasupplicant
+wireless-regdb

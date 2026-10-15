@@ -255,6 +255,22 @@ Ethernet cable. A serial console or a keyboard helps you watch
    goes down within seconds and the TV goes back to the room (or the
    setup screen, if no server is set).
 
+With a keyboard or mouse on the box (a PC, or a Pi with one plugged in),
+on a fresh box with no network:
+
+9. **The countdown and the button.** The setup screen counts down
+   ("starts its own setup Wi-Fi in 0:52"). Press **Start setup Wi-Fi
+   now**: the hotspot screen follows within seconds. If the hotspot
+   can't start, the setup screen says why (`journalctl -u boxd` has the
+   same nmcli message) and counts down again.
+10. **Wi-Fi on the TV.** Reboot, press **Choose Wi-Fi on this screen**.
+    The networks in range are listed. Pick the house network, type a
+    wrong password: "Couldn't join … — is the password right?" on the
+    TV, and no hotspot appears under it. The right password: the TV goes
+    to the setup QR (now on the house network) or the room. Leave the
+    picker idle for three minutes: it goes back to the setup screen and
+    the hotspot starts.
+
 ## The overnight update (MAD-810)
 
 The done-when for updates: a box flashed with release N, left on
@@ -326,7 +342,9 @@ qemu-system-x86_64 $COMMON -cdrom "$ISO"         # BIOS
 ```
 
 For each: the menu shows **Syncphony Box** and **Install Syncphony Box
-to disk**; the first boots to the setup QR. Set the server from the host,
+to disk**; the first boots to the setup QR with no device timeout or
+failed units on the way (`systemctl --failed` is empty; `findmnt /data`
+is a tmpfs, `systemctl is-active ssh` is `active`). Set the server from the host,
 pair from a phone (or the room), queue a song: it plays through the
 VM's sound. `findmnt /` is live-boot's overlay; `systemctl status
 syncphony-update.timer` shows its service skipped (condition), not

@@ -74,11 +74,10 @@ func (d *Daemon) handleSetupScreen(w http.ResponseWriter, r *http.Request) {
 	notice := d.net.notice
 	d.mu.Unlock()
 	writePage(w, setupScreenHTML(setupScreenData{
-		QR:      data,
-		URL:     setupURL,
-		IPs:     boxIPs(),
-		Network: networkState(),
-		Notice:  notice,
+		QR:     data,
+		URL:    setupURL,
+		IPs:    boxIPs(),
+		Notice: notice,
 	}))
 }
 

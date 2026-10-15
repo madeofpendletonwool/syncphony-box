@@ -90,6 +90,36 @@ handovers. `/status` gains `wifiSetup` and a `wifi` object with the
 phase, the access point's name, the network being joined, and the last
 error.
 
+### The TV's own controls
+
+Added after the first PC run (ADR 0013), where the setup screen said
+"in a minute" and then, with the hotspot failing to start, nothing at
+all. A box with a mouse or a keyboard (a PC, or a Pi with one plugged
+in), or a remote for the buttons, can do more than wait:
+
+- **The countdown.** `/status`'s `wifi` object gains `hotspotIn` (seconds
+  until the hotspot starts, while the box is offline and waiting),
+  `device` and `unavailable` (no Wi-Fi device, and nmcli's reason), and
+  `startError` (why the last start failed; the grace then re-arms). The
+  setup screen shows all of it instead of a fixed "in a minute".
+- **Start setup Wi-Fi now.** A button on the setup screen
+  (`POST /wifi/hotspot`): the hotspot without the grace, for an offline
+  box with a Wi-Fi device.
+- **Choose Wi-Fi on this screen.** `/wifi`, linked from the setup and
+  hotspot screens, lists the networks from a fresh scan
+  (`POST /wifi/scan`) and joins one (`POST /wifi/join`) with the
+  portal's checks. A scan needs the radio, so a running hotspot gives it
+  up. While the screen is in use it pings `POST /wifi/hold`, and the
+  policy doesn't start the hotspot within 30 s of the last ping; after
+  three idle minutes the screen goes back to `/setup` and the usual
+  timing resumes. A failed join from the TV shows its reason there and
+  doesn't bring the hotspot up under it.
+
+These routes are on the loopback listener only, and refuse any Origin
+but boxd's own, so neither the server's page nor anything else can
+drive the radio. The remote's arrows move the focus between the
+buttons; typing a password needs a keyboard.
+
 ### Saving: answer first, then join
 
 The access point and the house network share one radio. So boxd answers

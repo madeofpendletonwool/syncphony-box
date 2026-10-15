@@ -1,0 +1,61 @@
+#!/bin/sh
+# The x86 live session's /data and /boot/firmware (MAD-846, ADR 0013).
+# Run by syncphony-live-boot.service, before data-persist, sshd, the
+# kiosk and boxd look at either.
+#
+# /data. On a Pi and an installed PC box, the initramfs mounts the
+# syncphony-data partition. live-boot doesn't, and the live image has no
+# fstab line for it either: a stick without one is the normal case here,
+# and a fstab entry for a missing label stalls the boot on a device
+# timeout and a failed fsck. So this script mounts it:
+#
+#   - a partition labelled syncphony-data (on the stick), fsck'd first,
+#     when there is one: pairing and setup survive a reboot
+#   - otherwise a tmpfs: the box works and forgets everything at
+#     power-off. /data must still be a mount, so data-persist lays it out
+#     (the kiosk's Chromium profile, the SSH host keys the /etc/ssh links
+#     point at) exactly as on a fresh data partition
+#
+# The "Install to disk" boot always gets the tmpfs: the disk being
+# installed on may hold an old box's data partition, and a mounted
+# partition can't be wiped.
+#
+# /boot/firmware. On a Pi and an installed PC box it is the boot
+# partition and holds syncphony.txt. The live session has none, so it is
+# a bind mount of /data/boot-firmware, which persists exactly as well as
+# /data does.
+set -eu
+
+TEMPLATE=/usr/lib/syncphony-box/syncphony.txt
+
+mount_data() {
+	mountpoint -q /data && return 0
+	mkdir -p /data
+	if ! grep -qw syncphony.install /proc/cmdline; then
+		dev="$(blkid -L syncphony-data 2>/dev/null || true)"
+		if [ -n "${dev}" ]; then
+			# e2fsck -p: 0 = clean, 1 = corrected; anything higher needs a
+			# human, so the session runs in RAM instead (the initramfs
+			# overlay script's rule).
+			rc=0
+			e2fsck -p "${dev}" >/dev/null 2>&1 || rc=$?
+			if [ "${rc}" -le 1 ] && mount -t ext4 -o defaults "${dev}" /data; then
+				echo "live-session: /data is ${dev}"
+				# journald started before /data existed; move this boot's
+				# log onto it (/var/log/journal links to /data/journal).
+				mkdir -p /data/journal
+				journalctl --flush >/dev/null 2>&1 || true
+				return 0
+			fi
+			echo "live-session: ${dev} failed its check (e2fsck ${rc}) or didn't mount; /data is in RAM" >&2
+		fi
+	fi
+	mount -t tmpfs -o mode=0755 tmpfs /data
+	echo "live-session: no syncphony-data partition; /data is in RAM for this session"
+}
+
+mount_data
+
+mkdir -p /data/boot-firmware /boot/firmware
+[ -f /data/boot-firmware/syncphony.txt ] || cp "${TEMPLATE}" /data/boot-firmware/syncphony.txt
+mountpoint -q /boot/firmware || mount --bind /data/boot-firmware /boot/firmware
