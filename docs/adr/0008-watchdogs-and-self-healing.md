@@ -71,7 +71,7 @@ procedure in docs/testing.md.
 ### 3. Thermals: sample, log, report
 
 boxd runs `vcgencmd measure_temp` and `vcgencmd get_throttled`
-(`libraspberrypi-bin`, installed with this stage) once a minute, logs
+(`raspi-utils-core`, installed with this stage) once a minute, logs
 one journal line per sample (`journalctl -u boxd` doubles as a
 temperature log, and journald is persistent on /data), and reports the
 latest values in `GET /v1/info` — `temperatureC`, `throttled`,

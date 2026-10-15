@@ -14,7 +14,7 @@ import (
 // flags, sampled once a minute into the journal (one line per sample, so
 // `journalctl -u boxd` doubles as a temperature log) and reported through
 // /v1/info for the room's Screens list (stage 4). vcgencmd is the
-// Raspberry Pi firmware tool (libraspberrypi-bin); where it is missing —
+// Raspberry Pi firmware tool (raspi-utils-core); where it is missing —
 // a dev machine, a test — thermals simply go unreported and everything
 // downstream tolerates their absence.
 const thermalsEvery = time.Minute

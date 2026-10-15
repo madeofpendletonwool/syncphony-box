@@ -99,7 +99,7 @@ fi
 # --- packages ---------------------------------------------------------------
 for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi-daemon \
 	pipewire pipewire-bin pipewire-alsa pipewire-pulse wireplumber pulseaudio-utils alsa-utils \
-	libraspberrypi-bin systemd-timesyncd v4l-utils; do
+	raspi-utils-core systemd-timesyncd v4l-utils; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -374,7 +374,9 @@ USER_UNITS="var/lib/syncphony-box/.config/systemd/user"
 for unit in default.target.wants/pipewire.service default.target.wants/wireplumber.service \
 	default.target.wants/pipewire-pulse.service sockets.target.wants/pipewire.socket \
 	sockets.target.wants/pipewire-pulse.socket; do
-	if sudo test -e "${WORK}/root/${USER_UNITS}/${unit}" &&
+	# -L, not -e: the links are absolute, so -e would follow them on the
+	# build host rather than inside the image. The target is checked below.
+	if sudo test -L "${WORK}/root/${USER_UNITS}/${unit}" &&
 		sudo test -e "${WORK}/root/usr/lib/systemd/user/${unit##*/}"; then
 		check "kiosk user unit ${unit##*/} enabled" ok
 	else
