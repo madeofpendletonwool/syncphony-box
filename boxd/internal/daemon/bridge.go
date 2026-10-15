@@ -30,6 +30,7 @@ func (d *Daemon) bridgeMux() *http.ServeMux {
 	mux.HandleFunc("GET /setup", d.handleSetupScreen)
 	mux.HandleFunc("GET /start", d.handleStartScreen)
 	mux.HandleFunc("GET /storage", d.handleStorageScreen)
+	mux.HandleFunc("GET /hotspot", d.handleHotspotScreen)
 	return mux
 }
 

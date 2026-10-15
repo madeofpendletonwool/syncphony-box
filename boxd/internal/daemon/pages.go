@@ -33,6 +33,11 @@ var pageStyle = `
 		margin: 2rem auto; width: 28rem; max-width: 80vw;
 	}
 	.qr img { width: 100%; image-rendering: pixelated; }
+	.notice {
+		background: #2a1518; border: 1px solid #5c2a30; border-radius: 1rem;
+		color: #f1b8ba; padding: 1rem 1.5rem;
+	}
+	.steps { text-align: left; display: inline-block; }
 `
 
 type setupScreenData struct {
@@ -40,6 +45,7 @@ type setupScreenData struct {
 	URL     string
 	IPs     []string
 	Network string
+	Notice  string // after a hotspot join that couldn't save the server URL
 }
 
 func setupScreenHTML(d setupScreenData) string {
@@ -64,14 +70,30 @@ func setupScreenHTML(d setupScreenData) string {
 	<p>or open <b>{{.URL}}</b></p>
 	{{if .IPs}}<p class="dim">or try {{range .IPs}}<code>{{.}}</code> {{end}}</p>{{end}}
 	<p class="dim">There you can set which Syncphony server this box shows.</p>
+	{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
+	{{if .NoNetwork}}<p class="dim">No network yet — without Ethernet or Wi-Fi, this box
+	starts its own setup Wi-Fi in a minute.</p>{{end}}
 </main>
+<script>
+	// The TV follows the box: to the Wi-Fi setup hotspot when the box has
+	// no network (MAD-808), to the start page once a server is set.
+	setInterval(async () => {
+		try {
+			const s = await (await fetch('/status', { cache: 'no-store' })).json();
+			if (s.wifiSetup) location.replace('/hotspot');
+			else if (s.configured) location.replace('/start');
+		} catch (e) { /* boxd hiccup: stay */ }
+	}, 3000);
+</script>
 </body>
 </html>`))
 	t.Execute(b, struct {
-		QR  template.URL // boxd generates this data URI itself; html/template would otherwise rewrite it
-		URL string
-		IPs []string
-	}{template.URL(d.QR), d.URL, ips})
+		QR        template.URL // boxd generates this data URI itself; html/template would otherwise rewrite it
+		URL       string
+		IPs       []string
+		Notice    string
+		NoNetwork bool
+	}{template.URL(d.QR), d.URL, ips, d.Notice, d.Network == "offline"})
 	return b.String()
 }
 
@@ -236,6 +258,7 @@ func startScreenHTML(d startScreenData) string {
 			const r = await fetch('/status', { cache: 'no-store' });
 			const s = await r.json();
 			if (s.reachable && s.target) { location.replace(s.target); return; }
+			if (s.wifiSetup) { location.replace('/hotspot'); return; }
 			connecting.hidden = true;
 			offline.hidden = false;
 		} catch (e) { /* boxd hiccup: keep the current screen */ }
@@ -250,6 +273,84 @@ func startScreenHTML(d startScreenData) string {
 		IPs      []string
 		Network  string
 	}{d.Server, template.JS(targetJS), d.IPs, d.Network})
+	return b.String()
+}
+
+type hotspotScreenData struct {
+	SSID     string
+	QR       string
+	Phase    string
+	Joining  string
+	Error    string
+	Address  string
+	Checking bool
+}
+
+// hotspotScreenHTML is the TV during Wi-Fi setup (MAD-808): join the
+// box's own network from the QR code, then the setup page opens on the
+// phone. It follows a join live ("Joining Home…", then either the room
+// or the hotspot again with the reason) by polling /status.
+func hotspotScreenHTML(d hotspotScreenData) string {
+	b := &strings.Builder{}
+	t := template.Must(template.New("hotspot").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Syncphony Box — Wi-Fi setup</title>
+<style>` + pageStyle + `
+	.qr { width: 22rem; }
+	#dots::after { content: ""; animation: dots 1.5s steps(4) infinite; }
+	@keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+</style>
+</head>
+<body>
+<main>
+{{if .Joining}}
+	<h1>Joining {{.Joining}}<span id="dots"></span></h1>
+	<p class="dim">Your phone has left this box's setup network. If the box can't
+	join, the setup network comes back here with the reason.</p>
+{{else if .Checking}}
+	<h1>Looking for a known network<span id="dots"></span></h1>
+	<p class="dim">The setup network is back in a moment if none turns up.</p>
+{{else}}
+	<h1>Connect this box to Wi-Fi</h1>
+	{{if .Error}}<p class="notice">{{.Error}}</p>{{end}}
+	<div class="qr">{{if .QR}}<img src="{{.QR}}" alt="QR code">{{end}}</div>
+	<div class="steps">
+		<p>1. Scan to join <b>{{.SSID}}</b> (no password)</p>
+		<p>2. A setup page opens — pick your Wi-Fi</p>
+	</div>
+	<p class="dim">If the page doesn't open, go to <code>{{.Address}}</code></p>
+{{end}}
+</main>
+<script>
+	const shown = {{.State}};
+	setInterval(async () => {
+		try {
+			const s = await (await fetch('/status', { cache: 'no-store' })).json();
+			if (!s.wifiSetup) { location.replace('/start'); return; }
+			const w = s.wifi || {};
+			if ([w.phase, w.joining, w.error].join('|') !== shown) location.reload();
+		} catch (e) { /* boxd hiccup: stay */ }
+	}, 2000);
+</script>
+</body>
+</html>`))
+	state := d.Phase + "|" + d.Joining + "|" + d.Error
+	stateJS, err := json.Marshal(state)
+	if err != nil {
+		stateJS = []byte(`""`)
+	}
+	t.Execute(b, struct {
+		SSID     string
+		QR       template.URL // generated by boxd, see setupScreenHTML
+		Joining  string
+		Error    string
+		Address  string
+		Checking bool
+		State    template.JS
+	}{d.SSID, template.URL(d.QR), d.Joining, d.Error, d.Address, d.Checking, template.JS(stateJS)})
 	return b.String()
 }
 

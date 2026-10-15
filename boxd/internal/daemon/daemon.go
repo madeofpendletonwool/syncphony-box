@@ -1,7 +1,8 @@
 // Package daemon is boxd's running half: the box bridge on loopback
 // (ADR 0016), the local screens the kiosk shows when there's no server
-// to display — setup with a QR code, and the offline "can't reach"
-// screen — and the watchdogs and thermals that make the box heal itself
+// to display — setup with a QR code, the offline "can't reach" screen,
+// and the Wi-Fi setup hotspot for a box with no network at all
+// (MAD-808, ADR 0010) — and the watchdogs and thermals that make the box heal itself
 // (MAD-806, ADR 0008).
 package daemon
 
@@ -19,6 +20,7 @@ import (
 
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/cec"
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/config"
+	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/wifi"
 )
 
 const (
@@ -103,6 +105,13 @@ type Daemon struct {
 	lastNightlyDay string      // local day the nightly reload last ran ("2006-01-02")
 	therm          thermals    // last thermal sample (zero = none yet)
 	lastFlush      time.Time   // last pairing-durability sync burst
+
+	// The Wi-Fi setup hotspot (MAD-808): NetworkManager behind an
+	// interface for tests, its state, and netOp serializing the
+	// NetworkManager work (the watch loop, a join, a recheck).
+	wifi  netDriver
+	net   netState
+	netOp sync.Mutex
 }
 
 // New builds a daemon around the current syncphony.txt (the SB_* env hooks
@@ -121,6 +130,10 @@ func New(version string, log *log.Logger, run config.RunCommand) *Daemon {
 		},
 	}
 	d.reloadConfig()
+	d.wifi = wifi.New()
+	if _, err := os.Stat(seenMarker()); err == nil {
+		d.net.seenOnline = true
+	}
 	d.cec = cec.New(d.cecConfig(d.cfg), log, d.onRemoteLongPress)
 	d.wakeTV = d.cec.WakeAndSwitch
 	return d
@@ -218,6 +231,7 @@ func (d *Daemon) Run() error {
 
 	d.log.Printf("boxd: %s bridge on http://%s (server: %s)", d.version, bridgeAddr, d.serverOrNone())
 	go d.watch()
+	go d.netWatch()
 	go d.sampleThermalsLoop()
 	go func() {
 		// CEC (MAD-807): register as a playback device on the adapters

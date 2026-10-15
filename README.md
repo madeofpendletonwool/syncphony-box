@@ -81,6 +81,19 @@ and serves the box's own screens:
   room is open, boxd notices (heartbeats keep coming while the page is
   alive) and moves the TV to the offline screen after a couple of minutes.
 
+- **No network at all: the setup hotspot.** A box with no Ethernet and
+  no Wi-Fi becomes its own open Wi-Fi network, `Syncphony-Box-XXXX`
+  (the last four of its MAC). The TV shows a QR code that joins it, and
+  the phone's captive-portal page opens with the Wi-Fi networks in range,
+  a password field, and the server URL if the box doesn't have one yet.
+  Saving joins that Wi-Fi. If the join fails, the hotspot comes back and
+  the TV says why. A new box starts the hotspot 60 s after boot. A box
+  that has been online before shows the offline screen first and only
+  falls back to the hotspot after 5 minutes without a network, so a
+  router reboot never puts it in setup mode. Imager's Wi-Fi settings
+  still work and are the fast path
+  ([ADR 0010](docs/adr/0010-wifi-setup-hotspot.md)).
+
 Logs go to journald: `journalctl -u boxd -u syncphony-kiosk`.
 
 ## The TV remote (HDMI-CEC)
@@ -338,6 +351,12 @@ has its own page: [docs/testing.md](docs/testing.md).
 - `audio=usb` with a USB DAC: the DAC is the default sink and the test tone
   plays through it after a reboot.
 - Unplug HDMI while music plays, plug it back: audio returns by itself.
+- Fresh flash, no Imager Wi-Fi, no cable: about a minute after boot the
+  TV shows the `Syncphony-Box-XXXX` QR; a phone joins, the setup page
+  opens by itself, and choosing the house Wi-Fi (plus the server URL)
+  ends in the pairing screen. A wrong password brings the hotspot back
+  with the reason on the TV ([docs/testing.md](docs/testing.md), "The
+  Wi-Fi setup run").
 - Fresh flash, no `server_url`: the setup screen's QR appears; setting the
   URL from a phone (the box validates it via `/healthz`) brings up `/tv`'s
   pairing code with no SD-card editing.
@@ -368,7 +387,8 @@ has its own page: [docs/testing.md](docs/testing.md).
 
 1. Write the `.img.xz` to an SD card with Raspberry Pi Imager.
 2. In the OS customization settings, set at minimum a username and password
-   (Wi-Fi, SSH and hostname as needed). The first user in the image ships with
+   (Wi-Fi, SSH and hostname as needed — without Wi-Fi settings or a cable,
+   the box offers its setup hotspot instead). The first user in the image ships with
    a **locked password** — there is no default login; the Imager settings are
    applied on first boot by cloud-init.
 3. Boot the Pi. Without Imager customization the image behaves like stock
@@ -379,9 +399,9 @@ has its own page: [docs/testing.md](docs/testing.md).
 ```
 pi-gen/               pi-gen submodule (pinned, never edited)
 stage-syncphony/      custom pi-gen stage (packages, kiosk session,
-                      read-only root, CEC, ...)
+                      read-only root, CEC, Wi-Fi setup, ...)
 boxd/                 the box's Go helper daemon (bridge, config, screens,
-                      watchdogs, CEC)
+                      watchdogs, CEC, Wi-Fi setup hotspot)
 config                pi-gen build configuration
 build.sh              wraps pi-gen's build-docker.sh (builds boxd first,
                       then appends the /data partition after export)

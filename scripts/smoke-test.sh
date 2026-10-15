@@ -21,7 +21,9 @@
 # drop-in, timesyncd enabled and ordered before the kiosk, and vcgencmd
 # for boxd's thermals. The HDMI-CEC pieces are in place too: cec-ctl
 # installed, the cec group with its udev rule for /dev/cec* and
-# /dev/uinput, boxd granted the group, and uinput loaded at boot.
+# /dev/uinput, boxd granted the group, and uinput loaded at boot. And the
+# Wi-Fi setup hotspot's: NetworkManager and dnsmasq, the captive-portal
+# DNS catch-all, and boxd ordered after NetworkManager.
 
 set -euo pipefail
 
@@ -312,6 +314,34 @@ if sudo grep -q '^uinput$' "${WORK}/root/etc/modules-load.d/syncphony-cec.conf";
 	check "uinput loaded at boot" ok
 else
 	check "uinput loaded at boot" "modules-load entry missing"
+fi
+
+# --- Wi-Fi setup hotspot (MAD-808) --------------------------------------------
+if sudo test -x "${WORK}/root/usr/bin/nmcli" &&
+	sudo test -x "${WORK}/root/usr/sbin/dnsmasq"; then
+	check "NetworkManager and dnsmasq installed (hotspot)" ok
+else
+	check "NetworkManager and dnsmasq installed (hotspot)" "nmcli or dnsmasq missing"
+fi
+
+if sudo grep -q '^address=/#/10.42.0.1$' \
+	"${WORK}/root/etc/NetworkManager/dnsmasq-shared.d/syncphony-captive.conf"; then
+	check "hotspot DNS catch-all points at boxd" ok
+else
+	check "hotspot DNS catch-all points at boxd" "dnsmasq-shared.d drop-in missing or wrong"
+fi
+
+if sudo grep -q '^After=NetworkManager.service' \
+	"${WORK}/root/etc/systemd/system/boxd.service.d/60-network.conf"; then
+	check "boxd starts after NetworkManager" ok
+else
+	check "boxd starts after NetworkManager" "drop-in missing or wrong"
+fi
+
+if sudo test -L "${WORK}/root/etc/systemd/system/multi-user.target.wants/NetworkManager.service"; then
+	check "NetworkManager enabled" ok
+else
+	check "NetworkManager enabled" "not enabled"
 fi
 
 # The boot config apply is boxd now: same unit, new engine.
