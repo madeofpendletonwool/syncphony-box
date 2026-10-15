@@ -7,24 +7,15 @@
 #   - NetworkManager + dnsmasq-base (00-packages): the access point runs
 #     in NetworkManager's shared mode, which serves DHCP and DNS through
 #     dnsmasq.
-#   - The dnsmasq-shared.d drop-in: on that network every name resolves
-#     to the box and DHCP names the portal — the captive portal.
-#   - boxd ordered after NetworkManager.
+#   - The dnsmasq-shared.d drop-in (on that network every name resolves
+#     to the box and DHCP names the portal — the captive portal) and the
+#     boxd drop-in ordering it after NetworkManager both come with the
+#     syncphony-box package.
 #
 # boxd itself (when to start the hotspot, the portal form, the join, the
 # TV screen) lives in boxd/internal/daemon/hotspot.go and
 # boxd/internal/wifi. The access point's connection is created in memory
 # only, so it never lands in system-connections — or on /data.
-
-FILES="$(dirname "$0")/files"
-
-install -v -d -m 0755 "${ROOTFS_DIR}/etc/NetworkManager/dnsmasq-shared.d"
-install -v -m 0644 "${FILES}/syncphony-captive.conf" \
-	"${ROOTFS_DIR}/etc/NetworkManager/dnsmasq-shared.d/syncphony-captive.conf"
-
-install -v -d -m 0755 "${ROOTFS_DIR}/etc/systemd/system/boxd.service.d"
-install -v -m 0644 "${FILES}/60-network.conf" \
-	"${ROOTFS_DIR}/etc/systemd/system/boxd.service.d/60-network.conf"
 
 on_chroot << EOF
 systemctl enable NetworkManager.service

@@ -3,6 +3,9 @@ name: build
 on:
   push:
     branches: [main]
+    # A version tag also releases: the image, the .deb, the Imager listing
+    # and the apt repo (the release job below; docs/releasing.md).
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -68,3 +71,112 @@ jobs:
             deploy/*.img.xz
             deploy/*.img.xz.sha256
             deploy/*.img.info
+            deploy/*.deb
+
+  release:
+    # Tags only: publish what the image job built and smoke-tested
+    # (MAD-809/MAD-810, ADR 0011 and 0012).
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [tests, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # the GitHub Release and the gh-pages push
+      id-token: write   # cosign keyless signing (GitHub OIDC)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: syncphony-box-image-${{ github.sha }}
+          path: deploy
+
+      - name: Check the release inputs
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          # A release image must be able to update itself.
+          test -f packaging/apt/syncphony-box-archive-keyring.asc || {
+            echo "::error::packaging/apt/syncphony-box-archive-keyring.asc is missing (docs/releasing.md)"; exit 1; }
+          test -n "${APT_SIGNING_KEY}" || {
+            echo "::error::the APT_SIGNING_KEY secret is not set (docs/releasing.md)"; exit 1; }
+          scripts/changelog-section.sh "${VERSION}" > notes.md
+          IMAGE="deploy/syncphony-box-${GITHUB_REF_NAME}-arm64.img.xz"
+          DEB="deploy/syncphony-box_${VERSION}_arm64.deb"
+          ls -l "${IMAGE}" "${DEB}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          echo "DEB=${DEB}" >> "$GITHUB_ENV"
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      - name: Checksums, signed
+        run: |
+          set -euo pipefail
+          cd deploy
+          sha256sum "$(basename "${IMAGE}")" "$(basename "${DEB}")" > SHA256SUMS
+          # Keyless: the signature binds SHA256SUMS to this workflow run at
+          # this tag (Sigstore's transparency log records it).
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+
+      - name: Imager listing
+        run: |
+          set -euo pipefail
+          mkdir -p imager
+          python3 -I scripts/imager-os-list.py "${IMAGE}" \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "${IMAGE}")" \
+            --icon "${PAGES_URL}/imager/icon.png" \
+            --version "${VERSION}" \
+            --release-date "$(git log -1 --format=%cs "${GITHUB_REF_NAME}")" \
+            > imager/os_list.json
+          cat imager/os_list.json
+
+      - name: GitHub Release
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Syncphony Box ${VERSION}" \
+            --notes-file notes.md \
+            --verify-tag \
+            "${IMAGE}" "${IMAGE}.sha256" "${DEB}" \
+            deploy/SHA256SUMS deploy/SHA256SUMS.sigstore.json \
+            imager/os_list.json
+
+      - name: Publish the apt repo and the Imager listing (gh-pages)
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq apt-utils
+          echo "${APT_SIGNING_KEY}" | gpg --batch --import
+          APT_SIGNING_KEY_ID="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')"
+          export APT_SIGNING_KEY_ID
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch --depth=1 origin gh-pages; then
+            git worktree add site FETCH_HEAD
+            git -C site checkout -B gh-pages
+          else
+            git worktree add --orphan -b gh-pages site
+          fi
+
+          scripts/apt-repo.sh site/apt "${DEB}"
+          cp packaging/apt/syncphony-box-archive-keyring.asc site/apt/
+          mkdir -p site/imager
+          cp imager/os_list.json site/imager/os_list.json
+          cp packaging/imager/icon.png site/imager/icon.png
+          touch site/.nojekyll
+
+          git -C site add -A
+          git -C site commit -m "release ${GITHUB_REF_NAME}: apt repo and Imager listing"
+          git -C site push origin gh-pages

@@ -1,0 +1,6 @@
+# The syncphony-box apt repository (ADR 0012): the box's own software.
+# Not in /etc/apt/sources.list.d on purpose: only the box's updater uses
+# it (boxd update passes -o Dir::Etc::SourceList=<this file>), so the
+# image build's apt runs never pull a published package over the one the
+# build just made, and a build before the repo exists still works.
+deb [signed-by=/usr/share/keyrings/syncphony-box-archive-keyring.asc] @APT_URL@ stable main

@@ -8,6 +8,66 @@ plug the Pi into the TV, and it boots straight into the room.
 
 The box is **client only**: it runs no Syncphony server. Point it at yours.
 
+## Install
+
+You need a Raspberry Pi 4 or 5, a 16 GB+ SD card, [Raspberry Pi
+Imager](https://www.raspberrypi.com/software/) 1.9 or newer, and the
+address of your Syncphony server.
+
+1. **Add the Syncphony Box listing to Imager.** Open Imager → **App
+   Options** → **Content Repository** → **Use custom URL**, and paste:
+
+   ```
+   https://madeofpendletonwool.github.io/syncphony-box/imager/os_list.json
+   ```
+
+   (Or start Imager with it from a terminal:
+   `rpi-imager --repo https://madeofpendletonwool.github.io/syncphony-box/imager/os_list.json`.)
+2. **Choose** your Pi model, then **Syncphony Box** as the operating
+   system, and your SD card.
+3. **Customize** when Imager offers it: set a username and password, your
+   **Wi-Fi** (skip it if the box will be on Ethernet), and optionally the
+   hostname, your timezone (the nightly update runs at 04:00 local) and
+   SSH. The image has no default login. Without Wi-Fi settings or a
+   cable, the box starts its own setup hotspot instead (see below).
+4. **Write**, put the card in the Pi, plug the Pi into the TV with the
+   HDMI port next to the USB-C power, and power it on.
+5. **Point it at your server.** The TV shows a QR code: scan it with a
+   phone on the same network and type your server's address. (Or, before
+   step 4, open `syncphony.txt` on the card's `bootfs` drive and set
+   `server_url=` — see [Configuration](#configuration-syncphonytxt).)
+6. **Pair from your phone.** The TV shows a pairing code; in your room on
+   Syncphony, open the Screens list and add it. Done: the box plays the
+   room from then on, through reboots, power cuts and updates.
+
+Updates arrive by themselves overnight ([Updates](#updates)).
+
+### Without the listing
+
+Every [release](https://github.com/madeofpendletonwool/syncphony-box/releases)
+has the image (`syncphony-box-<version>-arm64.img.xz`). In Imager pick
+**Use custom** and choose the downloaded file; customization works the
+same way.
+
+### Checking a download
+
+Each release has a `SHA256SUMS` file signed with
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+by the release workflow itself (keyless, through GitHub's OIDC, so there
+is no key to leak). With the release's files in one directory:
+
+```sh
+cosign verify-blob SHA256SUMS \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/madeofpendletonwool/syncphony-box/\.github/workflows/build\.yml@refs/tags/v'
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+`Verified OK` and `OK` mean the image is exactly what CI built from the
+tagged source. (Imager checks the image against the listing's SHA-256 on
+its own while writing.)
+
 ## Supported hardware
 
 - Raspberry Pi 4 or Pi 5, 2 GB RAM or more
@@ -36,6 +96,9 @@ The result lands in `deploy/`:
 - `syncphony-box-<version>-arm64.img.xz` — the image (`<version>` from
   `git describe`)
 - `syncphony-box-<version>-arm64.img.xz.sha256` — its checksum
+- `syncphony-box_<deb-version>_arm64.deb`, the box's software as a
+  package. The image installs it, and boxes update to newer ones from the
+  apt repo.
 
 `make clean` removes build output and the leftover pi-gen build container.
 
@@ -54,7 +117,8 @@ loop-mounts the built image and checks packages, enabled units, the locked
 first user, the first-boot seed files, the kiosk session, the boot
 config file, the audio stack, boxd, and the read-only-root layout: three
 partitions, the overlay wired into the initramfs, and every persistent
-path on /data), and uploads the image as a workflow artifact.
+path on /data), and uploads the image as a workflow artifact. Pushing a
+`v*` tag also releases it; see [docs/releasing.md](docs/releasing.md).
 
 ## boxd
 
@@ -194,16 +258,48 @@ The power-pull test procedure (50 pulls: during boot, during playback,
 seconds after pairing) is [docs/testing.md](docs/testing.md).
 
 **Maintaining the box.** Runtime writes under `/` are discarded by
-design, so package updates go to the real root through a chroot (the
-overlayroot-chroot role in this image):
+design, so package changes go to the real root through a chroot (the
+overlayroot-chroot role in this image). The nightly update does this by
+itself ([Updates](#updates)); for anything else:
 
 ```sh
 sudo syncphony-box chroot            # shell on the real root, read-write
-# (or: sudo syncphony-box chroot apt full-upgrade)
+# (or: sudo syncphony-box chroot apt install <something>)
 ```
 
-Reboot afterwards. Changes to the pairing, config and anything else on
-`/data` need no chroot — that partition is writable at runtime.
+`/data` and a writable `/boot/firmware` come along into the chroot, so a
+kernel update lands too. Reboot afterwards. Changes to the pairing,
+config and anything else on `/data` need no chroot, because that partition
+is writable at runtime.
+
+## Updates
+
+The box keeps itself current with no reflashing
+([ADR 0012](docs/adr/0012-box-updates.md)). The web app needs nothing: the
+Syncphony server serves it. What updates is the OS and the box's own
+software, which is the `syncphony-box` package, served from a signed apt
+repository on this repo's GitHub Pages.
+
+- **Every night around 04:00** (box-local time) `syncphony-update.timer`
+  runs `boxd update`: Debian and Raspberry Pi security updates plus the
+  newest `syncphony-box`, installed onto the real root filesystem through
+  `syncphony-box chroot`. If the room is playing, it skips the night.
+- **It reboots only if something changed**, and only once the room is
+  idle. The pairing lives on `/data` and is untouched.
+- `auto_update=off` in `syncphony.txt` turns the nightly run off.
+- `sudo syncphony-box update` runs it now (even with `auto_update=off`);
+  add `--no-reboot` to reboot on your own schedule.
+- `syncphony-box version` prints the installed version; `/v1/info` reports
+  it with the last update's time and result, which the room's Screens list
+  shows.
+- The result of the last run is in `/data/syncphony-box/update.json`, and
+  the details are in `journalctl -u syncphony-update`.
+
+**If an update fails**, the box keeps running what it had, the Screens
+list says "update failed", and the next night tries again. **If a box no
+longer boots after an update**, reflash the card with the latest release
+and pair it again (step 6 above). There are no A/B partitions to fall
+back on.
 
 ## Self-healing: watchdogs
 
@@ -293,6 +389,7 @@ the box from booting; bad values are logged and fall back to defaults.
 | `cec` | `on`, `off` | `on` | switch the TV's input when music starts (HDMI-CEC; the remote's keys drive the box too — [docs/hardware.md](docs/hardware.md) for the TV matrix) |
 | `cec_standby` | `on`, `off` | `off` | put the TV in standby once the room has been idle (only ever a TV the box switched on itself) |
 | `cec_standby_minutes` | `1`–`240` | `30` | how many idle minutes before that standby |
+| `auto_update` | `on`, `off` | `on` | install updates every night around 04:00 ([Updates](#updates)) |
 
 On every boot, `syncphony-box-config.service` runs `boxd config apply`:
 it parses the file into `config.env` (kept on `/data`; `/etc/syncphony-box/config.env`
@@ -378,42 +475,47 @@ has its own page: [docs/testing.md](docs/testing.md).
 - A 12-hour playback soak with the visualizer on, on a 2 GB Pi 4 (the
   procedure is in docs/testing.md): memory plateaus, and the 05:00
   nightly reload happens only while idle.
+- Updates ([docs/testing.md](docs/testing.md), "The overnight update"):
+  flash release N, pair, publish N+1, leave the box on overnight. In the
+  morning `syncphony-box version` says N+1, the box is still paired and
+  playing, `findmnt /` is still the overlay, and `/v1/info` has an
+  `update` with `result: updated`. Playing music across 04:00 skips
+  that night.
 - An hour of real playback as the room's speaker — Navidrome (MP3 and
   FLAC) and Spotify (Ogg): no gaps between songs, no drift, no clipped
   first notes.
 
 
-## Flashing
-
-1. Write the `.img.xz` to an SD card with Raspberry Pi Imager.
-2. In the OS customization settings, set at minimum a username and password
-   (Wi-Fi, SSH and hostname as needed — without Wi-Fi settings or a cable,
-   the box offers its setup hotspot instead). The first user in the image ships with
-   a **locked password** — there is no default login; the Imager settings are
-   applied on first boot by cloud-init.
-3. Boot the Pi. Without Imager customization the image behaves like stock
-   Raspberry Pi OS Lite and asks for a username and password on the console.
-
 ## Repo layout
 
 ```
 pi-gen/               pi-gen submodule (pinned, never edited)
-stage-syncphony/      custom pi-gen stage (packages, kiosk session,
-                      read-only root, CEC, Wi-Fi setup, ...)
+packaging/root/       every file of the syncphony-box .deb, laid out as
+                      it installs (units, kiosk wrapper, scripts, ...)
+packaging/debian/     the .deb's control template and postinst
+packaging/apt/        the updater's apt source and the repo's public key
+packaging/imager/     the Imager listing's icon
+stage-syncphony/      custom pi-gen stage: installs the .deb, then the
+                      image-only changes (cmdline, fstab, /data links, ...)
 boxd/                 the box's Go helper daemon (bridge, config, screens,
                       watchdogs, CEC, Wi-Fi setup hotspot)
 config                pi-gen build configuration
-build.sh              wraps pi-gen's build-docker.sh (builds boxd first,
-                      then appends the /data partition after export)
+build.sh              wraps pi-gen's build-docker.sh (builds boxd and the
+                      .deb first, then appends the /data partition)
 Makefile              make image / make test / make lint / make clean
 scripts/add-data-partition.sh  the /data partition post-export step
 scripts/smoke-test.sh no-hardware image checks (used by CI)
+scripts/build-deb.sh  builds the syncphony-box .deb
+scripts/apt-repo.sh, imager-os-list.py, changelog-section.sh
+                      the release job's pieces (docs/releasing.md)
+CHANGELOG.md          release notes, one section per version
 tests/                bats tests pinning the syncphony.txt and /data
                       behavior (used by CI)
 docs/adr/             architecture decision records
 docs/persistent-paths.md  the list of everything that survives a power cut
 docs/hardware.md      tested boards and the TV CEC compatibility matrix
 docs/testing.md       the hardware test procedures (power pulls & co)
+docs/releasing.md     cutting a release; the signing keys
 ```
 
 ## License

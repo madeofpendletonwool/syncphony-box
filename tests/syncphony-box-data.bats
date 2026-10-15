@@ -5,7 +5,7 @@
 # mode: no mount check, no ssh-keygen).
 
 BATS_TEST_DIRNAME_ABS="$(cd "${BATS_TEST_DIRNAME}" && pwd)"
-SCRIPT="${BATS_TEST_DIRNAME_ABS}/../stage-syncphony/06-readonly-root/files/data-persist"
+SCRIPT="${BATS_TEST_DIRNAME_ABS}/../packaging/root/usr/lib/syncphony-box/data-persist"
 
 setup() {
 	WORK="$(mktemp -d)"
@@ -51,6 +51,30 @@ fake_identity() {
 	[ "$status" -eq 0 ]
 	grep -q '^syncphony:' "${ETC}/passwd"
 	grep -q '^syncphony:' "${ETC}/shadow"
+}
+
+@test "restore keeps accounts an update added to the image (saved entries win)" {
+	fake_identity
+	run "${SCRIPT}" save
+	[ "$status" -eq 0 ]
+
+	# The next boot after an update: the real root's files have the old
+	# accounts plus a new system user and group the update created, and
+	# the image's own (stale) line for the renamed Imager user.
+	printf 'root:x:0:0:root:/root:/bin/bash\nsyncphony:x:1000:1000::/home/syncphony:/usr/sbin/nologin\n_newsvc:x:990:990::/nonexistent:/usr/sbin/nologin\n' > "${ETC}/passwd"
+	printf 'root:x:0:\n_newsvc:x:990:\n' > "${ETC}/group"
+	chmod 0640 "${ETC}/shadow"
+	run "${SCRIPT}" restore
+	[ "$status" -eq 0 ]
+	# Saved entries win...
+	grep -qx 'syncphony:x:1000:1000::/home/syncphony:/bin/bash' "${ETC}/passwd"
+	# ...the update's new accounts stay...
+	grep -q '^_newsvc:x:990:' "${ETC}/passwd"
+	grep -q '^_newsvc:x:990:' "${ETC}/group"
+	# ...nothing is doubled, and the file keeps its mode.
+	[ "$(grep -c '^syncphony:' "${ETC}/passwd")" -eq 1 ]
+	[ "$(grep -c '^root:' "${ETC}/passwd")" -eq 1 ]
+	[ "$(stat -c %a "${ETC}/shadow")" = "640" ]
 }
 
 @test "save then restore round-trips the SSH host keys" {

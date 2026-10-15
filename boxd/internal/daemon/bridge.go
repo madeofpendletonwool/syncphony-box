@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/update"
 )
 
 // bridgeMux serves everything Chromium-facing on loopback: the /v1 box
@@ -132,6 +136,19 @@ func (d *Daemon) handleInfo(w http.ResponseWriter, r *http.Request) {
 			info[k] = v
 		}
 	}
+	// Uptime for the Screens list ("up 3 days"); absent off Linux.
+	if up, ok := uptimeSeconds(); ok {
+		info["uptimeSeconds"] = up
+	}
+	// The last nightly update (MAD-810), for the Screens list's "updated
+	// 3 h ago" / "update failed". Absent until the box has run one.
+	if st, ok := update.ReadState(update.StatePath()); ok {
+		u := map[string]any{"at": st.At.UTC().Format(time.RFC3339), "result": st.Result}
+		if st.Error != "" {
+			u["error"] = st.Error
+		}
+		info["update"] = u
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
 }
@@ -181,6 +198,16 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// playing reports whether the room is playing right now: the page's last
+// event says so and the page is still alive (a fresh heartbeat — a dead
+// page's last word doesn't count). The nightly update asks this through
+// /status before it starts and before it reboots (MAD-810).
+func (d *Daemon) playing() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lastEvent == "playing" && time.Since(d.lastBeat) < heartbeatWindow
+}
+
 func (d *Daemon) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	d.lastBeat = time.Now()
@@ -208,4 +235,25 @@ func (d *Daemon) handleReload(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(250 * time.Millisecond)
 		d.restartKiosk("reload (remote care)", false)
 	}()
+}
+
+// uptimeSeconds is the system's uptime from /proc/uptime, whole seconds.
+func uptimeSeconds() (int64, bool) {
+	data, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0, false
+	}
+	return parseUptime(string(data))
+}
+
+func parseUptime(s string) (int64, bool) {
+	f := strings.Fields(s)
+	if len(f) == 0 {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(f[0], 64)
+	if err != nil || v < 0 {
+		return 0, false
+	}
+	return int64(v), true
 }

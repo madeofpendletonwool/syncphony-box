@@ -10,7 +10,7 @@ import (
 // independent watchdogs:
 //
 //   - The kernel's hardware watchdog, armed by systemd's
-//     RuntimeWatchdogSec=15s (stage-syncphony/07-watchdog), catches what
+//     RuntimeWatchdogSec=15s (the package's system.conf.d drop-in), catches what
 //     no userspace loop can: a kernel or PID-1 hang hard-resets the Pi
 //     within 15 s.
 //   - The loop here, in boxd, catches a wedged page: the /tv heartbeat

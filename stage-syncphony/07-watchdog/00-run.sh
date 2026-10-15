@@ -4,21 +4,17 @@
 # watchdogs are image-level; the kiosk watchdog lives in boxd
 # (boxd/internal/daemon/watchdog.go).
 #
-#   - Hardware watchdog: systemd's RuntimeWatchdogSec=15s (the drop-in
-#     below) arms the BCM watchdog. A kernel or systemd hang reboots the
-#     Pi — the one failure no userspace loop can catch.
+#   - Hardware watchdog: systemd's RuntimeWatchdogSec=15s arms the BCM
+#     watchdog. The drop-in comes with the syncphony-box package
+#     (/usr/lib/systemd/system.conf.d/50-syncphony-watchdog.conf). A
+#     kernel or systemd hang reboots the Pi — the one failure no
+#     userspace loop can catch.
 #   - Time: systemd-timesyncd, enabled here and ordered before the kiosk
 #     (time-sync.target in syncphony-kiosk.service). The server's
 #     playback clock sync trusts the browser's clock, and a Pi has no RTC
 #     battery by default — without sync the box boots with a stale clock.
 #   - Thermals: boxd runs vcgencmd (installed with this stage's packages)
 #     every minute; nothing to wire here.
-
-FILES="$(dirname "$0")/files"
-
-install -v -d -m 0755 "${ROOTFS_DIR}/etc/systemd/system.conf.d"
-install -v -m 0644 "${FILES}/50-syncphony-watchdog.conf" \
-	"${ROOTFS_DIR}/etc/systemd/system.conf.d/50-syncphony-watchdog.conf"
 
 on_chroot << EOF
 systemctl enable systemd-timesyncd.service

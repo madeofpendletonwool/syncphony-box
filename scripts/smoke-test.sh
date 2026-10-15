@@ -23,7 +23,11 @@
 # installed, the cec group with its udev rule for /dev/cec* and
 # /dev/uinput, boxd granted the group, and uinput loaded at boot. And the
 # Wi-Fi setup hotspot's: NetworkManager and dnsmasq, the captive-portal
-# DNS catch-all, and boxd ordered after NetworkManager.
+# DNS catch-all, and boxd ordered after NetworkManager. And the release
+# and update pieces (MAD-809, MAD-810): the box's files come from the
+# syncphony-box package at this checkout's version, the nightly update
+# timer is on, the box repo is the updater's alone (never in /etc/apt),
+# docs and man pages are stripped, and the image is under 1 GiB.
 
 set -euo pipefail
 
@@ -101,7 +105,7 @@ fi
 # --- packages ---------------------------------------------------------------
 for pkg in cage chromium fonts-noto-color-emoji libgl1-mesa-dri cloud-init avahi-daemon \
 	pipewire pipewire-bin pipewire-alsa pipewire-pulse wireplumber pulseaudio-utils alsa-utils \
-	raspi-utils-core systemd-timesyncd v4l-utils; do
+	raspi-utils-core systemd-timesyncd v4l-utils syncphony-box; do
 	if sudo awk -v p="${pkg}" '
 		$0 == "Package: " p { inpkg = 1 }
 		inpkg && /^Status: / {
@@ -120,7 +124,7 @@ done
 for unit in cloud-config.service cloud-final.service syncphony-kiosk.service syncphony-box-config.service \
 	avahi-daemon.service syncphony-audio.service syncphony-audio-monitor.service boxd.service \
 	syncphony-data-grow.service syncphony-data-prepare.service syncphony-data-save.service \
-	syncphony-data-save.timer systemd-timesyncd.service; do
+	syncphony-data-save.timer systemd-timesyncd.service syncphony-update.timer; do
 	state="$(systemctl --root="${WORK}/root" is-enabled "${unit}" 2>/dev/null || true)"
 	if [ "${state}" = "enabled" ]; then
 		check "unit ${unit} enabled" ok
@@ -248,7 +252,7 @@ else
 fi
 
 if sudo grep -q '^ExecStart=/usr/lib/syncphony-box/boxd serve$' \
-	"${WORK}/root/etc/systemd/system/boxd.service"; then
+	"${WORK}/root/usr/lib/systemd/system/boxd.service"; then
 	check "boxd.service runs boxd serve" ok
 else
 	check "boxd.service runs boxd serve" "ExecStart mismatch"
@@ -256,20 +260,20 @@ fi
 
 # --- watchdogs and self-healing (MAD-806) -------------------------------------
 if sudo grep -q '^RuntimeWatchdogSec=15s' \
-	"${WORK}/root/etc/systemd/system.conf.d/50-syncphony-watchdog.conf"; then
+	"${WORK}/root/usr/lib/systemd/system.conf.d/50-syncphony-watchdog.conf"; then
 	check "hardware watchdog armed at 15 s" ok
 else
 	check "hardware watchdog armed at 15 s" "drop-in missing or wrong"
 fi
 
 if sudo grep -q '^RebootWatchdogSec=' \
-	"${WORK}/root/etc/systemd/system.conf.d/50-syncphony-watchdog.conf"; then
+	"${WORK}/root/usr/lib/systemd/system.conf.d/50-syncphony-watchdog.conf"; then
 	check "reboot watchdog bounded" ok
 else
 	check "reboot watchdog bounded" "no RebootWatchdogSec"
 fi
 
-if sudo grep -q 'time-sync.target' "${WORK}/root/etc/systemd/system/syncphony-kiosk.service"; then
+if sudo grep -q 'time-sync.target' "${WORK}/root/usr/lib/systemd/system/syncphony-kiosk.service"; then
 	check "kiosk unit waits for time sync" ok
 else
 	check "kiosk unit waits for time sync" "no time-sync.target ordering"
@@ -295,22 +299,22 @@ else
 fi
 
 if sudo grep -q 'KERNEL=="uinput", GROUP="cec"' \
-	"${WORK}/root/etc/udev/rules.d/60-syncphony-cec.rules" &&
+	"${WORK}/root/usr/lib/udev/rules.d/60-syncphony-cec.rules" &&
 	sudo grep -q 'KERNEL=="cec\[0-9\]\*", GROUP="cec"' \
-	"${WORK}/root/etc/udev/rules.d/60-syncphony-cec.rules"; then
+	"${WORK}/root/usr/lib/udev/rules.d/60-syncphony-cec.rules"; then
 	check "udev rule grants cec and uinput to the group" ok
 else
 	check "udev rule grants cec and uinput to the group" "rule missing or wrong"
 fi
 
 if sudo grep -q '^SupplementaryGroups=cec' \
-	"${WORK}/root/etc/systemd/system/boxd.service.d/50-cec.conf"; then
+	"${WORK}/root/usr/lib/systemd/system/boxd.service.d/50-cec.conf"; then
 	check "boxd holds the cec group" ok
 else
 	check "boxd holds the cec group" "drop-in missing or wrong"
 fi
 
-if sudo grep -q '^uinput$' "${WORK}/root/etc/modules-load.d/syncphony-cec.conf"; then
+if sudo grep -q '^uinput$' "${WORK}/root/usr/lib/modules-load.d/syncphony-cec.conf"; then
 	check "uinput loaded at boot" ok
 else
 	check "uinput loaded at boot" "modules-load entry missing"
@@ -332,7 +336,7 @@ else
 fi
 
 if sudo grep -q '^After=NetworkManager.service' \
-	"${WORK}/root/etc/systemd/system/boxd.service.d/60-network.conf"; then
+	"${WORK}/root/usr/lib/systemd/system/boxd.service.d/60-network.conf"; then
 	check "boxd starts after NetworkManager" ok
 else
 	check "boxd starts after NetworkManager" "drop-in missing or wrong"
@@ -346,7 +350,7 @@ fi
 
 # The boot config apply is boxd now: same unit, new engine.
 if sudo grep -q '^ExecStart=/usr/lib/syncphony-box/boxd config apply$' \
-	"${WORK}/root/etc/systemd/system/syncphony-box-config.service"; then
+	"${WORK}/root/usr/lib/systemd/system/syncphony-box-config.service"; then
 	check "config apply runs boxd" ok
 else
 	check "config apply runs boxd" "ExecStart mismatch"
@@ -358,7 +362,7 @@ else
 	check "kiosk wrapper enters through boxd" "no boxd URL in the wrapper"
 fi
 
-if sudo grep -q 'boxd.service' "${WORK}/root/etc/systemd/system/syncphony-kiosk.service"; then
+if sudo grep -q 'boxd.service' "${WORK}/root/usr/lib/systemd/system/syncphony-kiosk.service"; then
 	check "kiosk unit waits for boxd" ok
 else
 	check "kiosk unit waits for boxd" "no boxd reference"
@@ -378,7 +382,7 @@ else
 	check "syncphony.txt ships fully commented out" "active lines: ${active}"
 fi
 
-for key in server_url name audio resolution rotate cec cec_standby cec_standby_minutes; do
+for key in server_url name audio resolution rotate cec cec_standby cec_standby_minutes auto_update; do
 	if sudo grep -q "^#${key}=" "${WORK}/boot/syncphony.txt"; then
 		check "syncphony.txt documents ${key}" ok
 	else
@@ -414,14 +418,16 @@ for unit in default.target.wants/pipewire.service default.target.wants/wireplumb
 	fi
 done
 
-if sudo grep -q 'session.suspend-timeout-seconds = 0' \
-	"${WORK}/root/var/lib/syncphony-box/.config/wireplumber/wireplumber.conf.d/50-syncphony-box.conf"; then
+# A link into the package (absolute, so read the target inside the image).
+wp_link="$(sudo readlink "${WORK}/root/var/lib/syncphony-box/.config/wireplumber/wireplumber.conf.d/50-syncphony-box.conf" 2>/dev/null || true)"
+if [ "${wp_link}" = "/usr/share/syncphony-box/wireplumber/50-syncphony-box.conf" ] &&
+	sudo grep -q 'session.suspend-timeout-seconds = 0' "${WORK}/root${wp_link}"; then
 	check "wireplumber keeps outputs unsuspended" ok
 else
 	check "wireplumber keeps outputs unsuspended" "conf missing or rule absent"
 fi
 
-if sudo grep -q 'syncphony-audio.service' "${WORK}/root/etc/systemd/system/syncphony-kiosk.service"; then
+if sudo grep -q 'syncphony-audio.service' "${WORK}/root/usr/lib/systemd/system/syncphony-kiosk.service"; then
 	check "kiosk waits for the audio unit" ok
 else
 	check "kiosk waits for the audio unit" "no reference in syncphony-kiosk.service"
@@ -531,10 +537,78 @@ else
 fi
 
 if sudo grep -q 'SystemMaxUse=50M' \
-	"${WORK}/root/etc/systemd/journald.conf.d/50-syncphony-journald.conf"; then
+	"${WORK}/root/usr/lib/systemd/journald.conf.d/50-syncphony-journald.conf"; then
 	check "journald capped at 50M" ok
 else
 	check "journald capped at 50M" "drop-in missing or no cap"
+fi
+
+# --- the syncphony-box package and updates (MAD-810) -------------------------
+# The image installs the box's software as a package; the version must be
+# the one this checkout builds (not one pulled from the apt repo).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+want_version="$("${REPO_ROOT}/scripts/version.sh" --deb 2>/dev/null || true)"
+got_version="$(sudo awk '
+	$0 == "Package: syncphony-box" { inpkg = 1 }
+	inpkg && /^Version: / { print $2; exit }
+' "${WORK}/root/var/lib/dpkg/status")"
+if [ -n "${got_version}" ] && { [ -z "${want_version}" ] || [ "${got_version}" = "${want_version}" ]; }; then
+	check "syncphony-box package is this build (${got_version})" ok
+else
+	check "syncphony-box package is this build" "installed ${got_version:-nothing}, built ${want_version}"
+fi
+
+if sudo grep -q '^ExecStart=/usr/lib/syncphony-box/boxd update$' \
+	"${WORK}/root/usr/lib/systemd/system/syncphony-update.service" &&
+	sudo grep -q '^OnCalendar=\*-\*-\* 04:00:00$' \
+	"${WORK}/root/usr/lib/systemd/system/syncphony-update.timer"; then
+	check "nightly update runs boxd update at 04:00" ok
+else
+	check "nightly update runs boxd update at 04:00" "unit or timer wrong"
+fi
+
+# The box's repo is the updater's alone: never in sources.list.d, where
+# the image build's (and a person's) apt runs would use it.
+if sudo grep -rqs 'syncphony-box' "${WORK}/root/etc/apt/sources.list.d/" "${WORK}/root/etc/apt/sources.list"; then
+	check "box repo stays out of the system apt sources" "found in /etc/apt"
+else
+	check "box repo stays out of the system apt sources" ok
+fi
+
+if [ -f "${REPO_ROOT}/packaging/apt/syncphony-box-archive-keyring.asc" ]; then
+	if sudo test -f "${WORK}/root/usr/share/syncphony-box/apt/syncphony-box.list" &&
+		sudo cmp -s "${REPO_ROOT}/packaging/apt/syncphony-box-archive-keyring.asc" \
+			"${WORK}/root/usr/share/keyrings/syncphony-box-archive-keyring.asc"; then
+		check "updater's apt list and repo key installed" ok
+	else
+		check "updater's apt list and repo key installed" "list or keyring missing"
+	fi
+else
+	check "updater's apt list and repo key installed" ok
+	echo "NOTE: no repo key in this checkout; the image can't update itself (docs/releasing.md)"
+fi
+
+# --- slim (MAD-809: under ~1 GB compressed) --------------------------------
+if sudo test -f "${WORK}/root/etc/dpkg/dpkg.cfg.d/50-syncphony-slim"; then
+	check "dpkg keeps docs and translations out" ok
+else
+	check "dpkg keeps docs and translations out" "no 50-syncphony-slim"
+fi
+
+man_files="$(sudo find "${WORK}/root/usr/share/man" -type f 2>/dev/null | wc -l)"
+doc_files="$(sudo find "${WORK}/root/usr/share/doc" -type f ! -name copyright 2>/dev/null | wc -l)"
+if [ "${man_files}" -eq 0 ] && [ "${doc_files}" -eq 0 ]; then
+	check "man pages and docs stripped (copyright kept)" ok
+else
+	check "man pages and docs stripped (copyright kept)" "${man_files} man, ${doc_files} doc files left"
+fi
+
+image_bytes="$(stat -c %s "${IMAGE_XZ}")"
+limit=$((1024 * 1024 * 1024))
+if [ "${image_bytes}" -le "${limit}" ]; then
+	check "compressed image under 1 GiB ($((image_bytes / 1024 / 1024)) MiB)" ok
+else
+	check "compressed image under 1 GiB" "$((image_bytes / 1024 / 1024)) MiB"
 fi
 
 # --- first user is locked (no password until Imager settings apply) ---------

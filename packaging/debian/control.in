@@ -1,0 +1,18 @@
+Package: syncphony-box
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Syncphony Box <madeofpendletonwool@users.noreply.github.com>
+Section: misc
+Priority: optional
+Homepage: https://github.com/madeofpendletonwool/syncphony-box
+Installed-Size: @INSTALLED_SIZE@
+Depends: adduser, systemd, initramfs-tools, cage, chromium, curl, ca-certificates, avahi-daemon, pipewire, pipewire-pulse, wireplumber, pulseaudio-utils, network-manager, dnsmasq-base, v4l-utils, systemd-timesyncd
+Description: Syncphony Box: a TV's big screen and speaker for a Syncphony room
+ The software that makes a computer plugged into a TV a Syncphony box:
+ boxd (the box bridge, setup and offline screens, watchdogs, HDMI-CEC and
+ the Wi-Fi setup hotspot), the cage + Chromium kiosk session, the audio
+ setup, the read-only root and /data machinery, and the nightly updater.
+ .
+ It is built for the syncphony-box image and expects that image's layout
+ (the read-only root behind an overlay, /data, the boot partition with
+ syncphony.txt). Installing it on an ordinary desktop is not supported.

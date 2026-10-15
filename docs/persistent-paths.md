@@ -10,6 +10,7 @@ to or moved off `/data`, this list changes in the same commit.
 |---|---|---|---|
 | Chromium profile (pairing cookie, speaker flag) | `/data/chromium` | kiosk user; path pinned by boxd's `config.DefaultProfileDir` | the box's whole identity — the room pairing |
 | applied config | `/data/syncphony-box/config.env` | `boxd config apply` / the setup form | parsed `syncphony.txt`; `/etc/syncphony-box/config.env` is a symlink to it |
+| last update result | `/data/syncphony-box/update.json` | `boxd update` (the nightly timer, or `sudo syncphony-box update`) | when the last update ran, `updated`/`current`/`failed`, the installed version; `/v1/info` reports it (ADR 0012) |
 | boxd's own state | `/data/boxd` | boxd (as needed) | daemon state; today `network-seen`, the marker that this box has been online once (the setup hotspot then waits 5 minutes, not 1 — ADR 0010) |
 | journald logs | `/data/journal` | journald (`/var/log/journal` → symlink) | persistent logs, capped at 50 MB (`SystemMaxUse=50M`) |
 | machine identity | `/data/system/machine-id` | `data-persist save` (the bound id) | seeded into `/etc/machine-id` by the initramfs overlay script |

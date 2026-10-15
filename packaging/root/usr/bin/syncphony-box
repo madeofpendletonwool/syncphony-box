@@ -13,6 +13,12 @@
 #                                into it (a shell with no CMD), so package
 #                                updates and config edits stick. Reboot
 #                                afterwards. See docs/adr/0007.
+#   sudo syncphony-box update [--no-reboot]
+#                                install Debian security updates and the
+#                                newest box software now (what the nightly
+#                                timer does), and reboot into them once the
+#                                room is idle. See docs/adr/0012.
+#   syncphony-box version        the installed box software version.
 
 set -eu
 
@@ -39,6 +45,9 @@ usage() {
 usage:
   sudo syncphony-box reset            wipe the pairing (new pairing code)
   sudo syncphony-box chroot [CMD...]  shell/command on the real root fs
+  sudo syncphony-box update [--no-reboot]
+                                      install updates now; reboot when idle
+  syncphony-box version               the installed box software version
 EOF
 }
 
@@ -72,24 +81,53 @@ chroot)
 	RW=/media/root-rw
 	mkdir -p "${RW}"
 	mount -o rw "${SRC}" "${RW}"
+	boot_rw=""
 	cleanup() {
 		cd /
-		umount -l "${RW}/dev" "${RW}/proc" "${RW}/sys" 2>/dev/null || true
+		umount -l "${RW}/boot/firmware" "${RW}/data" "${RW}/dev" "${RW}/proc" "${RW}/sys" 2>/dev/null || true
+		if [ -n "${boot_rw}" ]; then
+			mount -o remount,ro /boot/firmware 2>/dev/null || true
+		fi
 		umount "${RW}"
 	}
 	trap cleanup EXIT
 	mount --rbind /dev "${RW}/dev"
 	mount --rbind /proc "${RW}/proc"
 	mount --rbind /sys "${RW}/sys"
+	# /data: the paths symlinked onto it (cloud-init's state, the journal)
+	# must resolve for package scripts too.
+	if mountpoint -q /data; then
+		mount --bind /data "${RW}/data"
+	fi
+	# /boot/firmware, writable for the duration: a kernel or firmware
+	# update writes the kernel, the DTBs and the initramfs there. It goes
+	# back to read-only on the way out (boxd does the same around its
+	# syncphony.txt writes).
+	if mountpoint -q /boot/firmware; then
+		if findmnt -n -o OPTIONS /boot/firmware | grep -qE '(^|,)ro(,|$)'; then
+			mount -o remount,rw /boot/firmware
+			boot_rw=1
+		fi
+		mount --bind /boot/firmware "${RW}/boot/firmware"
+	fi
 	cp /etc/resolv.conf "${RW}/etc/resolv.conf" 2>/dev/null || true
-	echo "Real root mounted read-write at ${RW} — changes here survive reboots;"
-	echo "anything you used to change under / was going to tmpfs. Reboot when done."
+	# On stderr: `boxd update` parses the chrooted command's stdout.
+	echo "Real root mounted read-write at ${RW} — changes here survive reboots;" >&2
+	echo "anything you used to change under / was going to tmpfs. Reboot when done." >&2
 	if [ "$#" -gt 1 ]; then
 		shift
 		chroot "${RW}" "$@"
 	else
 		chroot "${RW}" /bin/bash
 	fi
+	;;
+update)
+	need_root update
+	shift
+	exec "${BOXD_BIN}" update --manual "$@"
+	;;
+version)
+	dpkg-query -W -f='${Version}\n' syncphony-box 2>/dev/null || "${BOXD_BIN}" version
 	;;
 help|-h|--help)
 	usage

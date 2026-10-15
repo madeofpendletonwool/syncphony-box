@@ -61,15 +61,40 @@ ensure_layout() {
 	chown kiosk:kiosk "${DATA}/chromium" 2>/dev/null || true
 }
 
+# restore_identity merges one saved account file over the image's: every
+# saved entry wins (the Imager user, its password, its groups), and an
+# account the image has but the save doesn't is kept. That second half is
+# what the nightly update needs (ADR 0012): a package that adds a system
+# user or group writes it into the real root, and a plain copy of the old
+# save would drop it again at every boot.
+restore_identity() {
+	f="$1"
+	target="${ETC}/${f}"
+	if [ ! -f "${target}" ]; then
+		cp -p "${IDENT}/${f}" "${target}"
+		return
+	fi
+	tmp="${target}.data-persist"
+	awk -F: '
+		NR == FNR { if ($1 != "") { saved[$1] = 1; print } ; next }
+		$1 != "" && !($1 in saved)
+	' "${IDENT}/${f}" "${target}" > "${tmp}"
+	# Keep the image file's owner and mode (shadow is root:shadow 0640).
+	chmod --reference="${target}" "${tmp}" 2>/dev/null || true
+	chown --reference="${target}" "${tmp}" 2>/dev/null || true
+	mv -f "${tmp}" "${target}"
+}
+
 restore() {
 	data_usable || exit 0
 	ensure_layout
 
-	# The account files: whatever the last save had. On a fresh card this
-	# is a no-op and cloud-init creates the user from the Imager settings.
+	# The account files: whatever the last save had, merged over the
+	# image's. On a fresh card this is a no-op and cloud-init creates the
+	# user from the Imager settings.
 	for f in ${IDENTITY_FILES}; do
 		if [ -f "${IDENT}/${f}" ]; then
-			cp -p "${IDENT}/${f}" "${ETC}/${f}"
+			restore_identity "${f}"
 		fi
 	done
 
