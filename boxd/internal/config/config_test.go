@@ -26,7 +26,7 @@ func TestMissingFileYieldsDefaults(t *testing.T) {
 	c := ParseFile(filepath.Join(t.TempDir(), "nope.txt"))
 	if c.ServerURL != "" || c.Name != "" || c.Hostname != "" ||
 		c.Audio != "hdmi" || c.Resolution != "" || c.Rotate != "0" || c.CEC != "on" ||
-		c.CECStandby != "off" || c.CECStandbyMinutes != 30 {
+		c.CECStandby != "off" || c.CECStandbyMinutes != 30 || c.AutoUpdate != "on" {
 		t.Fatalf("got %+v", c)
 	}
 }
@@ -39,10 +39,10 @@ func TestBOMAndCRLF(t *testing.T) {
 }
 
 func TestAllKeysTogether(t *testing.T) {
-	c := parse(t, "server_url=https://s.example\nname=Den TV\naudio=analog\nresolution=1920x1080@60\nrotate=180\ncec=off\ncec_standby=on\ncec_standby_minutes=15\n")
+	c := parse(t, "server_url=https://s.example\nname=Den TV\naudio=analog\nresolution=1920x1080@60\nrotate=180\ncec=off\ncec_standby=on\ncec_standby_minutes=15\nauto_update=OFF\n")
 	if c.ServerURL != "https://s.example" || c.Name != "Den TV" || c.Hostname != "den-tv" ||
 		c.Audio != "analog" || c.Resolution != "1920x1080@60" || c.Rotate != "180" || c.CEC != "off" ||
-		c.CECStandby != "on" || c.CECStandbyMinutes != 15 {
+		c.CECStandby != "on" || c.CECStandbyMinutes != 15 || c.AutoUpdate != "off" {
 		t.Fatalf("got %+v", c)
 	}
 }
@@ -54,11 +54,12 @@ func TestUnknownKeysAndLinesWarn(t *testing.T) {
 }
 
 func TestInvalidValuesFallBack(t *testing.T) {
-	c := parse(t, "server_url=ftp://nope.example\naudio=spdif\nrotate=45\ncec=yes\nresolution=1080p\ncec_standby=maybe\ncec_standby_minutes=0\n")
+	c := parse(t, "server_url=ftp://nope.example\naudio=spdif\nrotate=45\ncec=yes\nresolution=1080p\ncec_standby=maybe\ncec_standby_minutes=0\nauto_update=sometimes\n")
 	if c.ServerURL != "" || c.Audio != "hdmi" || c.Rotate != "0" || c.CEC != "on" || c.Resolution != "" ||
-		c.CECStandby != "off" || c.CECStandbyMinutes != 30 {
+		c.CECStandby != "off" || c.CECStandbyMinutes != 30 || c.AutoUpdate != "on" {
 		t.Fatalf("got %+v", c)
 	}
+	wantWarning(t, c, "invalid auto_update 'sometimes'")
 	wantWarning(t, c, "invalid server_url 'ftp://nope.example'")
 	wantWarning(t, c, "invalid audio 'spdif'")
 	wantWarning(t, c, "invalid rotate '45'")

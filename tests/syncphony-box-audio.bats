@@ -1,5 +1,5 @@
 # Tests for the audio sink selection installed from
-# stage-syncphony/04-audio/files/audio-setup. Like the config tests, they
+# packaging/root/usr/lib/syncphony-box/audio-setup. Like the config tests, they
 # run the script straight from the repo, against a fake pactl fed with
 # representative `pactl list sinks` listings: the vc4 driver names its HDMI
 # PCM devices "bcm2835 HDMI 1" (HDMI0) and "bcm2835 HDMI 2" (HDMI1) on both
@@ -8,7 +8,7 @@
 # README smoke checklist; CI has no hardware.
 
 BATS_TEST_DIRNAME_ABS="$(cd "${BATS_TEST_DIRNAME}" && pwd)"
-SCRIPT="${BATS_TEST_DIRNAME_ABS}/../stage-syncphony/04-audio/files/audio-setup"
+SCRIPT="${BATS_TEST_DIRNAME_ABS}/../packaging/root/usr/lib/syncphony-box/audio-setup"
 
 setup() {
 	WORK="$(mktemp -d)"

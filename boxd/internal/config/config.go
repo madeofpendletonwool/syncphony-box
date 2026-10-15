@@ -52,6 +52,7 @@ type Config struct {
 	CEC               string
 	CECStandby        string // cec_standby: on puts the TV in standby when the room goes quiet
 	CECStandbyMinutes int    // cec_standby_minutes: how long quiet before that standby
+	AutoUpdate        string // auto_update: on lets the nightly update run (MAD-810)
 	Warnings          []string
 
 	// ProfileDir is not a syncphony.txt key: it is always the default (or
@@ -65,6 +66,7 @@ func Defaults() Config {
 	return Config{
 		Audio: "hdmi", Rotate: "0", CEC: "on",
 		CECStandby: "off", CECStandbyMinutes: 30,
+		AutoUpdate: "on",
 		ProfileDir: DefaultProfileDir,
 	}
 }
@@ -191,6 +193,15 @@ func (c *Config) apply(key, value string) {
 				c.CECStandbyMinutes = n
 			}
 		}
+	case "auto_update":
+		value = strings.ToLower(value)
+		switch value {
+		case "":
+		case "on", "off":
+			c.AutoUpdate = value
+		default:
+			c.warn("invalid auto_update '%s' (want on or off); using %s", value, c.AutoUpdate)
+		}
 	default:
 		c.warn("ignoring unknown key '%s'", key)
 	}
@@ -248,6 +259,7 @@ func (c Config) EnvContent() string {
 	fmt.Fprintf(&b, "CEC=%s\n", shellQuote(c.CEC))
 	fmt.Fprintf(&b, "CEC_STANDBY=%s\n", shellQuote(c.CECStandby))
 	fmt.Fprintf(&b, "CEC_STANDBY_MINUTES=%d\n", c.CECStandbyMinutes)
+	fmt.Fprintf(&b, "AUTO_UPDATE=%s\n", shellQuote(c.AutoUpdate))
 	fmt.Fprintf(&b, "PROFILE_DIR=%s\n", shellQuote(c.ProfileDir))
 	return b.String()
 }

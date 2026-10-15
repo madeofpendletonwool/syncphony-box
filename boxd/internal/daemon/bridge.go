@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/update"
 )
 
 // bridgeMux serves everything Chromium-facing on loopback: the /v1 box
@@ -132,6 +134,15 @@ func (d *Daemon) handleInfo(w http.ResponseWriter, r *http.Request) {
 			info[k] = v
 		}
 	}
+	// The last nightly update (MAD-810), for the Screens list's "updated
+	// 3 h ago" / "update failed". Absent until the box has run one.
+	if st, ok := update.ReadState(update.StatePath()); ok {
+		u := map[string]any{"at": st.At.UTC().Format(time.RFC3339), "result": st.Result}
+		if st.Error != "" {
+			u["error"] = st.Error
+		}
+		info["update"] = u
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
 }
@@ -179,6 +190,16 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	d.log.Printf("boxd: event type=%s room=%s", ev.Type, room)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// playing reports whether the room is playing right now: the page's last
+// event says so and the page is still alive (a fresh heartbeat — a dead
+// page's last word doesn't count). The nightly update asks this through
+// /status before it starts and before it reboots (MAD-810).
+func (d *Daemon) playing() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lastEvent == "playing" && time.Since(d.lastBeat) < heartbeatWindow
 }
 
 func (d *Daemon) handleHeartbeat(w http.ResponseWriter, r *http.Request) {

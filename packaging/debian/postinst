@@ -1,0 +1,40 @@
+#!/bin/sh
+# syncphony-box postinst. Runs at image build (inside pi-gen's chroot) and
+# on every update (inside `syncphony-box chroot`, on the real root of a
+# running box — no live systemd to talk to, the box reboots afterwards).
+# Everything here must be idempotent.
+set -e
+
+UNITS="boxd.service syncphony-box-config.service syncphony-kiosk.service \
+	syncphony-audio.service syncphony-audio-monitor.service \
+	syncphony-data-grow.service syncphony-data-prepare.service \
+	syncphony-data-save.service syncphony-data-save.timer \
+	syncphony-update.timer"
+
+case "$1" in
+configure)
+	# The kiosk user: locked password, no shell, no sudo. Seat-device
+	# access comes from the logind session plus these groups (ADR 0002).
+	if ! getent passwd kiosk >/dev/null; then
+		adduser --system --group --home /var/lib/syncphony-box \
+			--shell /usr/sbin/nologin kiosk
+	fi
+	for grp in video render audio input; do
+		if getent group "${grp}" >/dev/null; then
+			adduser --quiet kiosk "${grp}"
+		fi
+	done
+	install -d -o kiosk -g kiosk -m 0755 /var/lib/syncphony-box
+
+	# /dev/cec* and /dev/uinput go to this group (the udev rule); boxd
+	# holds it through its drop-in (ADR 0009).
+	getent group cec >/dev/null || addgroup --system cec
+
+	# Enabled on every configure so a unit added by an update is on after
+	# the reboot. systemctl works offline in a chroot.
+	# shellcheck disable=SC2086
+	systemctl enable ${UNITS}
+	;;
+esac
+
+exit 0

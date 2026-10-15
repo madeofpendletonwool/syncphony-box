@@ -9,7 +9,7 @@
 
 BATS_TEST_DIRNAME_ABS="$(cd "${BATS_TEST_DIRNAME}" && pwd)"
 SCRIPT="${BOXD_BIN:-${BATS_TEST_DIRNAME_ABS}/../.build/boxd}"
-TEMPLATE="${BATS_TEST_DIRNAME_ABS}/../stage-syncphony/03-config/files/syncphony.txt"
+TEMPLATE="${BATS_TEST_DIRNAME_ABS}/../packaging/root/usr/lib/syncphony-box/syncphony.txt"
 
 setup() {
 	WORK="$(mktemp -d)"
@@ -53,6 +53,7 @@ cmdline_is() {
 	echo "$output" | grep -Fxq "CEC='on'"
 	echo "$output" | grep -Fxq "CEC_STANDBY='off'"
 	echo "$output" | grep -Fxq "CEC_STANDBY_MINUTES=30"
+	echo "$output" | grep -Fxq "AUTO_UPDATE='on'"
 }
 
 @test "the shipped template is fully commented out (all defaults)" {

@@ -1,0 +1,15 @@
+# Keep the box image small (MAD-809): no documentation, man pages or
+# translations. The copyright files stay. Applies to updates too; the
+# image build strips what stage0-2 already installed (stage-syncphony/
+# 10-slim).
+path-exclude /usr/share/doc/*
+path-include /usr/share/doc/*/copyright
+path-exclude /usr/share/man/*
+path-exclude /usr/share/info/*
+path-exclude /usr/share/lintian/*
+path-exclude /usr/share/locale/*
+path-include /usr/share/locale/locale.alias
+path-include /usr/share/locale/en/*
+path-include /usr/share/locale/en_US/*
+path-exclude /usr/lib/chromium/locales/*
+path-include /usr/lib/chromium/locales/en-US.pak

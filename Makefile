@@ -28,5 +28,5 @@ reset: .build/boxd
 
 clean:
 	rm -rf deploy .build
-	rm -f stage-syncphony/05-boxd/files/boxd
+	rm -rf stage-syncphony/00-packages/files
 	-docker rm -v pigen_work >/dev/null 2>&1 || true

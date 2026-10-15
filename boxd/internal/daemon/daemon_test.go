@@ -33,6 +33,9 @@ func newTestDaemon(t *testing.T, txtContent string) (*Daemon, *recorder) {
 	// boxd's /data state (the hotspot's "been online" marker) in the
 	// test's own directory.
 	t.Setenv("SB_BOXD_DIR", dir)
+	// The nightly update's last result (MAD-810): none unless a test
+	// writes one.
+	t.Setenv("SB_UPDATE_STATE", filepath.Join(dir, "update.json"))
 	d := New("test-version", log.New(log.Writer(), "", 0), rec.run)
 	return d, rec
 }

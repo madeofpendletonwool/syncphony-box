@@ -3,11 +3,8 @@
 # Audio: PipeWire runs for the kiosk user (started at boot via linger, no
 # login), and audio-setup picks the sink from audio= in syncphony.txt,
 # sets it to 100% and follows hotplug. See docs/adr/0004-audio-output.md.
-
-install -v -d -m 0755 "${ROOTFS_DIR}/usr/lib/syncphony-box"
-install -v -m 0755 files/audio-setup "${ROOTFS_DIR}/usr/lib/syncphony-box/audio-setup"
-install -v -m 0644 files/syncphony-audio.service "${ROOTFS_DIR}/etc/systemd/system/syncphony-audio.service"
-install -v -m 0644 files/syncphony-audio-monitor.service "${ROOTFS_DIR}/etc/systemd/system/syncphony-audio-monitor.service"
+# audio-setup and its two units come with the syncphony-box package
+# (00-packages); what's left here is the kiosk user's own setup.
 
 # PipeWire's user services for the kiosk user. Linger makes systemd start
 # the kiosk user's manager (user@<uid>.service) at boot without a login;
@@ -27,9 +24,10 @@ done
 # Keep the outputs from auto-suspending: waking an ALSA device for the
 # first sound can clip its opening notes (audible between tracks).
 install -v -d -m 0755 "${ROOTFS_DIR}/var/lib/syncphony-box/.config/wireplumber/wireplumber.conf.d"
-install -v -m 0644 files/50-syncphony-box.conf "${ROOTFS_DIR}/var/lib/syncphony-box/.config/wireplumber/wireplumber.conf.d/50-syncphony-box.conf"
+# A link to the packaged file, so an update that retunes it reaches the box.
+ln -v -sfn /usr/share/syncphony-box/wireplumber/50-syncphony-box.conf \
+	"${ROOTFS_DIR}/var/lib/syncphony-box/.config/wireplumber/wireplumber.conf.d/50-syncphony-box.conf"
 
 on_chroot << EOF
-chown -R kiosk:kiosk /var/lib/syncphony-box/.config
-systemctl enable syncphony-audio.service syncphony-audio-monitor.service
+chown -R -h kiosk:kiosk /var/lib/syncphony-box/.config
 EOF

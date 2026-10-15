@@ -4,6 +4,9 @@
 # What this adds on top of calling pi-gen directly:
 #   - resolves the image version from `git describe` and pins the output name
 #     to syncphony-box-<version>-arm64.img.xz (+ .sha256)
+#   - builds boxd and the syncphony-box .deb (scripts/build-deb.sh), which
+#     the custom stage installs — and which lands in deploy/ too, for the
+#     apt repo (ADR 0012)
 #   - neutralizes stage2's EXPORT_IMAGE (pi-gen's documented SKIP_IMAGES
 #     mechanism) so only stage-syncphony exports an image
 #   - adds the third (/data) partition after export (scripts/
@@ -25,20 +28,27 @@ if [ ! -f pi-gen/build-docker.sh ]; then
 	exit 1
 fi
 
-VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo unversioned)"
+VERSION="$(scripts/version.sh)"
 IMG_BASE="syncphony-box-${VERSION}-arm64"
 
-# Build boxd (static, arm64 — Go cross-compiles) for the custom stage to
-# install. Vendored dependencies, so this needs no network.
+# Build boxd (static, arm64 — Go cross-compiles) and package it with the
+# rest of the box's files. Vendored dependencies, so this needs no network.
 if ! command -v go >/dev/null 2>&1; then
 	echo "Go is required to build boxd (https://go.dev/dl/)." >&2
 	exit 1
 fi
 echo "Building boxd ${VERSION} for arm64..."
+mkdir -p .build
 ( cd boxd &&
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=vendor -trimpath \
 		-ldflags "-s -w -X main.version=${VERSION}" \
-		-o "../stage-syncphony/05-boxd/files/boxd" ./cmd/boxd )
+		-o "../.build/boxd-arm64" ./cmd/boxd )
+
+rm -rf .build/deb
+DEB="$(scripts/build-deb.sh arm64 .build/boxd-arm64 .build/deb)"
+mkdir -p stage-syncphony/00-packages/files
+cp "${DEB}" stage-syncphony/00-packages/files/syncphony-box.deb
+echo "Packaged ${DEB}"
 
 # Only stage-syncphony/EXPORT_IMAGE (empty IMG_SUFFIX) exports an image.
 touch pi-gen/stage2/SKIP_IMAGES
@@ -69,6 +79,9 @@ echo "Adding the /data partition..."
 ./scripts/add-data-partition.sh "${IMAGE}"
 
 sha256sum "${IMAGE}" > "${IMAGE}.sha256"
+# The package the image carries, for the apt repo (the release job
+# publishes it).
+cp "${DEB}" deploy/
 
 echo
 echo "Built ${IMAGE}"

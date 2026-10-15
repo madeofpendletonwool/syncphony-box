@@ -1,0 +1,18 @@
+[Unit]
+Description=Syncphony box update (Debian security updates and the syncphony-box package)
+Documentation=https://github.com/madeofpendletonwool/syncphony-box/blob/main/docs/adr/0012-box-updates.md
+# boxd answers "is music playing?" and owns the auto_update= setting.
+After=network-online.target boxd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# boxd update: skips while the room is playing, upgrades the REAL root
+# through `syncphony-box chroot`, records the result on /data for
+# /v1/info, and reboots only if something changed and only while idle.
+ExecStart=/usr/lib/syncphony-box/boxd update
+# The idle wait before the reboot can take a while (a party that runs
+# late); the run gives up waiting and leaves the reboot to the next boot.
+TimeoutStartSec=5h
+Nice=10
+IOSchedulingClass=idle

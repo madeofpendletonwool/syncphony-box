@@ -1,0 +1,15 @@
+[Unit]
+Description=Nightly Syncphony box update
+
+[Timer]
+# 04:00 box-local time (Imager's timezone setting; UTC otherwise). A few
+# minutes of spread so a fleet doesn't hit the repos in the same second.
+# Not Persistent: a box that was off at 04:00 must not update at its next
+# boot, in the middle of whatever it was switched on for.
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=10min
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

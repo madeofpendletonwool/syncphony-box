@@ -15,14 +15,15 @@
 #     initramfs script, keyed off its own cmdline token); the stock
 #     `resize` token and rpi-resize (which would grow the read-only root)
 #     come out.
-
-FILES="$(dirname "$0")/files"
+#
+# The files — the initramfs overlay and grow-data scripts, data-persist,
+# the /data units, the journald cap — come with the syncphony-box package
+# (00-packages), which also enables the units. This substage makes the
+# image-level changes a package can't own: the kernel command line,
+# fstab, the module list, and the paths that become links onto /data.
 
 # --- the overlay -------------------------------------------------------------
 IIR="${ROOTFS_DIR}/etc/initramfs-tools"
-install -v -d -m 0755 "${IIR}/scripts" "${IIR}/scripts/local-premount"
-install -v -m 0644 "${FILES}/overlay" "${IIR}/scripts/overlay"
-install -v -m 0755 "${FILES}/grow-data" "${IIR}/scripts/local-premount/grow-data"
 # The overlay module must be in the initramfs (the script also has an
 # insmod fallback off the real root, but don't rely on it).
 touch "${IIR}/modules"
@@ -93,16 +94,7 @@ for type in rsa ecdsa ed25519; do
 	done
 done
 
-# --- units and tools ------------------------------------------------------------
-install -v -m 0755 "${FILES}/data-persist" "${ROOTFS_DIR}/usr/lib/syncphony-box/data-persist"
-install -v -d -m 0755 "${ROOTFS_DIR}/etc/systemd/journald.conf.d"
-install -v -m 0644 "${FILES}/50-syncphony-journald.conf" \
-	"${ROOTFS_DIR}/etc/systemd/journald.conf.d/50-syncphony-journald.conf"
-for unit in syncphony-data-grow.service syncphony-data-prepare.service \
-	syncphony-data-save.service syncphony-data-save.timer; do
-	install -v -m 0644 "${FILES}/${unit}" "${ROOTFS_DIR}/etc/systemd/system/${unit}"
-done
-
+# --- units ----------------------------------------------------------------------
 on_chroot << EOF
 # The stock first-boot grow targets the root partition; ours targets the
 # last one. Disable the stock unit (the resize token is already out of the
@@ -110,8 +102,8 @@ on_chroot << EOF
 systemctl disable rpi-resize.service
 # Package downloads/upgrades onto a tmpfs overlay would vanish at reboot
 # while looking applied — the one safe update path is writing the real
-# root (sudo syncphony-box chroot; ADR 0007), so the timers stay off.
+# root, which the box's own nightly update does (syncphony-update.timer
+# runs boxd update through syncphony-box chroot; ADR 0012). Debian's
+# timers stay off.
 systemctl disable unattended-upgrades.timer apt-daily.timer apt-daily-upgrade.timer || true
-systemctl enable syncphony-data-grow.service syncphony-data-prepare.service \
-	syncphony-data-save.service syncphony-data-save.timer
 EOF

@@ -22,3 +22,7 @@
 #cec_standby=off
 # How many idle minutes before that standby: 1 to 240.
 #cec_standby_minutes=30
+# Install Debian security updates and new box software every night around
+# 04:00 (never while music plays; the box reboots afterwards only if
+# something changed): on/off.
+#auto_update=on

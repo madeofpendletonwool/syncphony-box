@@ -16,6 +16,7 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 	th := d.therm
 	d.mu.Unlock()
 	status := map[string]any{
+		"playing":    d.playing(),
 		"configured": server != "",
 		"server":     server,
 		"reachable":  d.serverReachable(),

@@ -14,6 +14,7 @@ import (
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/config"
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/daemon"
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/profile"
+	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/update"
 )
 
 // version is the box software's version, stamped in by the build
@@ -36,6 +37,8 @@ func main() {
 			urlCmd()
 		case "profile":
 			profileCmd(os.Args[2:])
+		case "update":
+			updateCmd(os.Args[2:])
 		case "version", "--version", "-v":
 			fmt.Println(version)
 		case "help", "--help", "-h":
@@ -62,6 +65,9 @@ usage:
   boxd profile prep [DIR]  clear Chromium's unclean-exit state before a start
   boxd profile reset [DIR] wipe the profile; the box re-pairs from scratch
   boxd profile path       print the profile directory (SB_PROFILE overrides)
+  boxd update [--manual] [--no-reboot]
+                         install Debian and box updates on the real root;
+                         reboot into them once the room is idle
   boxd --version         print the box software version
 `)
 }
@@ -151,5 +157,35 @@ func profileCmd(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "boxd: profile %s: %v\n", args[0], err)
 		os.Exit(1)
+	}
+}
+
+// updateCmd is the nightly update (MAD-810, ADR 0012), run by
+// syncphony-update.timer — or by hand through `sudo syncphony-box update`
+// (--manual: runs even with auto_update=off or music playing).
+func updateCmd(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	manual := fs.Bool("manual", false, "run even with auto_update=off or while the room plays")
+	noReboot := fs.Bool("no-reboot", false, "install, but don't reboot afterwards")
+	fs.Parse(args)
+
+	unlock, err := update.Lock()
+	if err != nil {
+		log.Fatalf("update: %v", err)
+	}
+	defer unlock()
+	cfg := config.ParseFile(config.PathsFromEnv().Txt)
+	st, err := update.Run(update.RealEnv(log.Default()), update.Options{
+		Manual:     *manual,
+		NoReboot:   *noReboot,
+		AutoUpdate: cfg.AutoUpdate,
+	})
+	switch {
+	case err == update.Skipped:
+	case err != nil:
+		unlock()
+		os.Exit(1)
+	case *manual:
+		fmt.Printf("syncphony-box update: %s (syncphony-box %s)\n", st.Result, st.Version)
 	}
 }

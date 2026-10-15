@@ -12,7 +12,7 @@ import (
 // structs. cage (like any Wayland compositor) picks the device up through
 // libinput and Chromium sees ordinary key events — no shell, no root
 // helper, just /dev/uinput (which the udev rule in
-// stage-syncphony/08-cec grants boxd's group).
+// packaging/root/usr/lib/udev/rules.d grants boxd's group).
 
 // From linux/input.h and linux/uinput.h.
 const (

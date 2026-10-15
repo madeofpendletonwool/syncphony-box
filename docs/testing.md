@@ -253,3 +253,45 @@ Ethernet cable. A serial console or a keyboard helps you watch
 8. **Ethernet wins.** With the hotspot up, plug in a cable. The hotspot
    goes down within seconds and the TV goes back to the room (or the
    setup screen, if no server is set).
+
+## The overnight update (MAD-810)
+
+The done-when for updates: a box flashed with release N, left on
+overnight after N+1 is published, runs N+1 in the morning and is still
+paired. Takes two consecutive releases (cut a throwaway `vX.Y.Z-test`
+pair if needed) and one night, or a shortcut with the timer.
+
+1. Flash release N with Imager (from the listing), set Wi-Fi and the
+   timezone, and pair the box with a room. Play something, then stop.
+2. Publish release N+1 (docs/releasing.md).
+3. Leave the box on, idle, past 04:00 box-local time. Shortcut:
+   `sudo systemctl start syncphony-update.service` (the nightly path,
+   playback check included) instead of waiting.
+4. In the morning:
+   - `syncphony-box version` prints N+1;
+   - `journalctl -u syncphony-update -b -1` shows the upgrade and
+     "rebooting into the update"; `last reboot` shows one reboot near 04:00;
+   - the TV is in the room, paired, and plays when you queue a song;
+   - `findmnt /` is still the overlay, `/boot/firmware` is `ro` again;
+   - `curl -s 127.0.0.1:8099/v1/info` has `"update": {"result": "updated", ...}`
+     and `"version"` N+1;
+   - `getent passwd` still has the Imager user (and the password works).
+
+Then the negative cases:
+
+- **Playing at 04:00.** Queue a long playlist before 04:00: the journal
+  says "the room is playing; skipping tonight's update", nothing
+  installs, the music never stops.
+- **`auto_update=off`.** Set it on the card, boot, run
+  `sudo systemctl start syncphony-update.service`: skipped.
+  `sudo syncphony-box update` still updates.
+- **Nothing new.** A second `sudo syncphony-box update`: `current`, no
+  reboot.
+- **No network.** Unplug the network and run
+  `sudo systemctl start syncphony-update.service`: `result: failed` with
+  apt's reason in `/v1/info`, no reboot, the box keeps playing its room
+  once the network is back.
+- **A kernel update.** When a release window includes a Raspberry Pi
+  kernel update, check that it lands: `uname -r` after the reboot
+  matches the newest `/lib/modules`, and the box still boots with the
+  overlay (the initramfs was regenerated with the overlay script).
