@@ -25,7 +25,8 @@ func wantWarning(t *testing.T, c Config, substr string) {
 func TestMissingFileYieldsDefaults(t *testing.T) {
 	c := ParseFile(filepath.Join(t.TempDir(), "nope.txt"))
 	if c.ServerURL != "" || c.Name != "" || c.Hostname != "" ||
-		c.Audio != "hdmi" || c.Resolution != "" || c.Rotate != "0" || c.CEC != "on" {
+		c.Audio != "hdmi" || c.Resolution != "" || c.Rotate != "0" || c.CEC != "on" ||
+		c.CECStandby != "off" || c.CECStandbyMinutes != 30 {
 		t.Fatalf("got %+v", c)
 	}
 }
@@ -38,9 +39,10 @@ func TestBOMAndCRLF(t *testing.T) {
 }
 
 func TestAllKeysTogether(t *testing.T) {
-	c := parse(t, "server_url=https://s.example\nname=Den TV\naudio=analog\nresolution=1920x1080@60\nrotate=180\ncec=off\n")
+	c := parse(t, "server_url=https://s.example\nname=Den TV\naudio=analog\nresolution=1920x1080@60\nrotate=180\ncec=off\ncec_standby=on\ncec_standby_minutes=15\n")
 	if c.ServerURL != "https://s.example" || c.Name != "Den TV" || c.Hostname != "den-tv" ||
-		c.Audio != "analog" || c.Resolution != "1920x1080@60" || c.Rotate != "180" || c.CEC != "off" {
+		c.Audio != "analog" || c.Resolution != "1920x1080@60" || c.Rotate != "180" || c.CEC != "off" ||
+		c.CECStandby != "on" || c.CECStandbyMinutes != 15 {
 		t.Fatalf("got %+v", c)
 	}
 }
@@ -52,8 +54,9 @@ func TestUnknownKeysAndLinesWarn(t *testing.T) {
 }
 
 func TestInvalidValuesFallBack(t *testing.T) {
-	c := parse(t, "server_url=ftp://nope.example\naudio=spdif\nrotate=45\ncec=yes\nresolution=1080p\n")
-	if c.ServerURL != "" || c.Audio != "hdmi" || c.Rotate != "0" || c.CEC != "on" || c.Resolution != "" {
+	c := parse(t, "server_url=ftp://nope.example\naudio=spdif\nrotate=45\ncec=yes\nresolution=1080p\ncec_standby=maybe\ncec_standby_minutes=0\n")
+	if c.ServerURL != "" || c.Audio != "hdmi" || c.Rotate != "0" || c.CEC != "on" || c.Resolution != "" ||
+		c.CECStandby != "off" || c.CECStandbyMinutes != 30 {
 		t.Fatalf("got %+v", c)
 	}
 	wantWarning(t, c, "invalid server_url 'ftp://nope.example'")
@@ -61,6 +64,23 @@ func TestInvalidValuesFallBack(t *testing.T) {
 	wantWarning(t, c, "invalid rotate '45'")
 	wantWarning(t, c, "invalid cec 'yes'")
 	wantWarning(t, c, "invalid resolution '1080p'")
+	wantWarning(t, c, "invalid cec_standby 'maybe'")
+	wantWarning(t, c, "invalid cec_standby_minutes '0'")
+}
+
+func TestCECStandbyMinutesRange(t *testing.T) {
+	c := parse(t, "cec_standby_minutes=240\n")
+	if c.CECStandbyMinutes != 240 {
+		t.Fatalf("240 should be accepted, got %d", c.CECStandbyMinutes)
+	}
+	c = parse(t, "cec_standby_minutes=241\n")
+	if c.CECStandbyMinutes != 30 {
+		t.Fatalf("241 should fall back, got %d", c.CECStandbyMinutes)
+	}
+	c = parse(t, "cec_standby_minutes=ten\n")
+	if c.CECStandbyMinutes != 30 {
+		t.Fatalf("non-numeric should fall back, got %d", c.CECStandbyMinutes)
+	}
 }
 
 func TestDuplicateLastWinsAndCaseInsensitive(t *testing.T) {
@@ -94,6 +114,8 @@ func TestEnvContentIsSourceable(t *testing.T) {
 		"AUDIO='hdmi'":                   true,
 		"ROTATE='0'":                     true,
 		"CEC='on'":                       true,
+		"CEC_STANDBY='off'":              true,
+		"CEC_STANDBY_MINUTES=30":         true,
 	} {
 		if !strings.Contains(env, want+"\n") {
 			t.Errorf("env missing %q:\n%s", want, env)

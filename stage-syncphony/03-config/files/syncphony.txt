@@ -18,3 +18,7 @@
 #rotate=0
 # Switch the TV to this input when music starts (HDMI-CEC): on/off.
 #cec=on
+# Put the TV in standby after the room has been idle (HDMI-CEC): on/off.
+#cec_standby=off
+# How many idle minutes before that standby: 1 to 240.
+#cec_standby_minutes=30

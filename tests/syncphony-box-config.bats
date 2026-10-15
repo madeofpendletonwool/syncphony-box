@@ -51,6 +51,8 @@ cmdline_is() {
 	echo "$output" | grep -Fxq "RESOLUTION=''"
 	echo "$output" | grep -Fxq "ROTATE='0'"
 	echo "$output" | grep -Fxq "CEC='on'"
+	echo "$output" | grep -Fxq "CEC_STANDBY='off'"
+	echo "$output" | grep -Fxq "CEC_STANDBY_MINUTES=30"
 }
 
 @test "the shipped template is fully commented out (all defaults)" {
@@ -61,6 +63,7 @@ cmdline_is() {
 	echo "$output" | grep -Fxq "AUDIO='hdmi'"
 	echo "$output" | grep -Fxq "ROTATE='0'"
 	echo "$output" | grep -Fxq "CEC='on'"
+	echo "$output" | grep -Fxq "CEC_STANDBY='off'"
 }
 
 @test "accepts a UTF-8 BOM and CRLF line endings (Notepad)" {
@@ -73,8 +76,8 @@ cmdline_is() {
 	echo "$output" | grep -Fxq "AUDIO='usb'"
 }
 
-@test "all six keys parse together" {
-	txt 'server_url=https://s.example\nname=Den TV\naudio=analog\nresolution=1920x1080@60\nrotate=180\ncec=off\n'
+@test "all keys parse together" {
+	txt 'server_url=https://s.example\nname=Den TV\naudio=analog\nresolution=1920x1080@60\nrotate=180\ncec=off\ncec_standby=on\ncec_standby_minutes=15\n'
 	run "${SCRIPT}" parse "${TXT}"
 	[ "$status" -eq 0 ]
 	echo "$output" | grep -Fxq "SERVER_URL='https://s.example'"
@@ -84,6 +87,8 @@ cmdline_is() {
 	echo "$output" | grep -Fxq "RESOLUTION='1920x1080@60'"
 	echo "$output" | grep -Fxq "ROTATE='180'"
 	echo "$output" | grep -Fxq "CEC='off'"
+	echo "$output" | grep -Fxq "CEC_STANDBY='on'"
+	echo "$output" | grep -Fxq "CEC_STANDBY_MINUTES=15"
 }
 
 @test "unknown keys warn on stderr and are ignored" {
@@ -104,17 +109,21 @@ cmdline_is() {
 }
 
 @test "invalid audio, rotate, cec and resolution fall back to defaults" {
-	txt 'audio=spdif\nrotate=45\ncec=yes\nresolution=1080p\n'
+	txt 'audio=spdif\nrotate=45\ncec=yes\nresolution=1080p\ncec_standby=maybe\ncec_standby_minutes=0\n'
 	run "${SCRIPT}" parse "${TXT}"
 	[ "$status" -eq 0 ]
 	echo "$output" | grep -Fxq "AUDIO='hdmi'"
 	echo "$output" | grep -Fxq "ROTATE='0'"
 	echo "$output" | grep -Fxq "CEC='on'"
 	echo "$output" | grep -Fxq "RESOLUTION=''"
+	echo "$output" | grep -Fxq "CEC_STANDBY='off'"
+	echo "$output" | grep -Fxq "CEC_STANDBY_MINUTES=30"
 	echo "$output" | grep -q "invalid audio 'spdif'"
 	echo "$output" | grep -q "invalid rotate '45'"
 	echo "$output" | grep -q "invalid cec 'yes'"
 	echo "$output" | grep -q "invalid resolution '1080p'"
+	echo "$output" | grep -q "invalid cec_standby 'maybe'"
+	echo "$output" | grep -q "invalid cec_standby_minutes '0'"
 }
 
 @test "resolution accepts WxH and WxH@refresh" {

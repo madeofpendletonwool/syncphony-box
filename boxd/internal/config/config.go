@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -42,14 +43,16 @@ const (
 // Config is the validated result of parsing syncphony.txt. Invalid values
 // fall back to defaults with a warning; parsing never fails.
 type Config struct {
-	ServerURL  string
-	Name       string
-	Hostname   string // slug of Name; empty when Name is unset or unusable
-	Audio      string
-	Resolution string
-	Rotate     string
-	CEC        string
-	Warnings   []string
+	ServerURL         string
+	Name              string
+	Hostname          string // slug of Name; empty when Name is unset or unusable
+	Audio             string
+	Resolution        string
+	Rotate            string
+	CEC               string
+	CECStandby        string // cec_standby: on puts the TV in standby when the room goes quiet
+	CECStandbyMinutes int    // cec_standby_minutes: how long quiet before that standby
+	Warnings          []string
 
 	// ProfileDir is not a syncphony.txt key: it is always the default (or
 	// the SB_PROFILE hook, applied by Apply) so the Chromium profile path
@@ -59,7 +62,11 @@ type Config struct {
 
 // Defaults returns the config when nothing is set in the file.
 func Defaults() Config {
-	return Config{Audio: "hdmi", Rotate: "0", CEC: "on", ProfileDir: DefaultProfileDir}
+	return Config{
+		Audio: "hdmi", Rotate: "0", CEC: "on",
+		CECStandby: "off", CECStandbyMinutes: 30,
+		ProfileDir: DefaultProfileDir,
+	}
 }
 
 func (c *Config) warn(format string, args ...any) {
@@ -162,12 +169,37 @@ func (c *Config) apply(key, value string) {
 		default:
 			c.warn("invalid cec '%s' (want on or off); using %s", value, c.CEC)
 		}
+	case "cec_standby":
+		value = strings.ToLower(value)
+		switch value {
+		case "":
+		case "on", "off":
+			c.CECStandby = value
+		default:
+			c.warn("invalid cec_standby '%s' (want on or off); using %s", value, c.CECStandby)
+		}
+	case "cec_standby_minutes":
+		switch {
+		case value == "":
+		case !minutesRE.MatchString(value):
+			c.warn("invalid cec_standby_minutes '%s' (want 1 to 240); using %d", value, c.CECStandbyMinutes)
+		default:
+			n, _ := strconv.Atoi(value)
+			if n < 1 || n > 240 {
+				c.warn("invalid cec_standby_minutes '%s' (want 1 to 240); using %d", value, c.CECStandbyMinutes)
+			} else {
+				c.CECStandbyMinutes = n
+			}
+		}
 	default:
 		c.warn("ignoring unknown key '%s'", key)
 	}
 }
 
-var resolutionRE = regexp.MustCompile(`^[0-9]{3,5}x[0-9]{3,5}(@[0-9]{1,3})?$`)
+var (
+	resolutionRE = regexp.MustCompile(`^[0-9]{3,5}x[0-9]{3,5}(@[0-9]{1,3})?$`)
+	minutesRE    = regexp.MustCompile(`^[0-9]+$`)
+)
 
 func stripBOM(b []byte) []byte {
 	if len(b) >= 3 && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf {
@@ -214,6 +246,8 @@ func (c Config) EnvContent() string {
 	fmt.Fprintf(&b, "RESOLUTION=%s\n", shellQuote(c.Resolution))
 	fmt.Fprintf(&b, "ROTATE=%s\n", shellQuote(c.Rotate))
 	fmt.Fprintf(&b, "CEC=%s\n", shellQuote(c.CEC))
+	fmt.Fprintf(&b, "CEC_STANDBY=%s\n", shellQuote(c.CECStandby))
+	fmt.Fprintf(&b, "CEC_STANDBY_MINUTES=%d\n", c.CECStandbyMinutes)
 	fmt.Fprintf(&b, "PROFILE_DIR=%s\n", shellQuote(c.ProfileDir))
 	return b.String()
 }

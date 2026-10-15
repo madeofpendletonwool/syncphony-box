@@ -74,7 +74,9 @@ func (d *Daemon) handleSetupScreen(w http.ResponseWriter, r *http.Request) {
 // handleStartScreen serves the page the kiosk opens when a server is
 // configured: it checks the server before navigating, so the box never
 // shows Chromium's error page — it shows the offline screen and returns to
-// /tv on its own once /healthz answers.
+// /tv on its own once /healthz answers. After a long OK press on the
+// remote it shows the box's info screen first (MAD-807), then hands the
+// TV back the same way.
 func (d *Daemon) handleStartScreen(w http.ResponseWriter, r *http.Request) {
 	if !storageHealthy() {
 		d.handleStorageScreen(w, r)
@@ -82,6 +84,17 @@ func (d *Daemon) handleStartScreen(w http.ResponseWriter, r *http.Request) {
 	}
 	if !d.configured() {
 		http.Redirect(w, r, "/setup", http.StatusFound)
+		return
+	}
+	if d.infoWindowOpen() {
+		writePage(w, infoScreenHTML(infoScreenData{
+			Name:    d.displayName(),
+			Version: d.version,
+			Server:  d.serverURL(),
+			Target:  d.targetURL(),
+			IPs:     boxIPs(),
+			Network: networkState(),
+		}))
 		return
 	}
 	st := startScreenData{

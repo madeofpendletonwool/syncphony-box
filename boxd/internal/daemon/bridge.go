@@ -110,15 +110,19 @@ func (d *Daemon) guard(next http.HandlerFunc) http.HandlerFunc {
 
 func (d *Daemon) handleInfo(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
-	th := d.therm
+	th, cecUp := d.therm, d.cecUp
 	d.mu.Unlock()
 	// The ADR 0016 core; the thermal fields (MAD-806) ride along once a
 	// sample exists — stage 4's Screens list reads them ("52 °C",
 	// "running hot / throttled"), and everyone else ignores them.
+	caps := []string{"reboot", "reload"}
+	if cecUp {
+		caps = append(caps, "cec")
+	}
 	info := map[string]any{
 		"version":      d.version,
 		"name":         d.displayName(),
-		"capabilities": []string{"reboot", "reload"}, // cec arrives in stage 3
+		"capabilities": caps,
 	}
 	if th.valid() {
 		// No sample (no vcgencmd here) means no fields: absent reads
@@ -164,6 +168,12 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	case "playing":
 		if previous != "playing" { // once per playback start, not per repeat
 			d.flushDisk(ev.Type)
+			// And the TV joins in: wake it and switch it to the box
+			// (MAD-807). Once per playback start; cec-ctl's own rate
+			// limit is the second lock.
+			if d.wakeTV != nil {
+				go d.wakeTV()
+			}
 		}
 	}
 	d.log.Printf("boxd: event type=%s room=%s", ev.Type, room)

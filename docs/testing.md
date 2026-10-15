@@ -163,3 +163,51 @@ journalctl --list-boots | wc -l               # one per pull
   boot, reboot, SSH in with it — works (the identity restore/save round
   trip). SSH host keys identical across two reboots:
   `ssh-keygen -lf /data/system/ssh/ssh_host_ed25519_key.pub`.
+
+## The CEC gauntlet (MAD-807)
+
+**Done-when:** with the TV in standby, queueing a song from a phone
+turns the TV on, switches it to the box and plays. The TV remote's OK
+takes over as speaker when someone else is playing, and play/pause
+works. Run on at least two TV brands (Samsung "Anynet+", LG "SimpLink",
+Sony "Bravia Sync" — enable CEC in the TV's settings first) and record
+the results in [docs/hardware.md](hardware.md).
+
+Watch the daemon's view of the bus while you do:
+
+```sh
+journalctl -u boxd -f
+```
+
+1. **Wake and switch.** TV in standby (or on the console's input), music
+   off. Queue a song from a phone → within a few seconds the TV comes on
+   showing the box and the music plays through it. `boxd` logs
+   `woke the TV and switched it to this box`.
+2. **No fight.** Switch the TV to the game console while music plays.
+   Pause, then play again from the phone (a new playback start) → the
+   box must *not* yank the TV back within the 5-minute rate limit.
+   `cec-ctl -d /dev/cec0 --monitor` should show the console's
+   `ACTIVE_SOURCE`, and boxd logs `became the active source; leaving the
+   TV alone`.
+3. **Remote keys.** Arrows step the visuals, right skips (or votes),
+   play/pause toggles, Back leaves to the stage view, and OK clicks
+   whatever is focused — with someone else's phone the speaker, the
+   "Play here instead" button is focused, so one OK takes the room.
+4. **OK long-press.** Hold OK for 3 seconds → the setup window opens
+   (the phone form answers at `http://<hostname>.local` for ten
+   minutes) and the TV shows the box's name, version and IPs, then
+   walks back to the room by itself and the speaker resumes. A short OK
+   press must still click — not open the info screen.
+5. **Optional standby.** `cec_standby=on` (and a short
+   `cec_standby_minutes` for the test) in `syncphony.txt`, reboot. Play
+   music (the box seizes the TV), stop it, wait out the minutes → the TV
+   goes to standby. Then switch the TV to the console by hand, play and
+   stop again → the box must leave the TV on.
+6. **`cec=off`.** Set it, reboot, put the TV in standby, queue a song →
+   the music plays (through the TV if it was already on the box) but
+   nothing is switched or woken; the remote's keys do nothing.
+
+Remote keys are per-TV uneven: if arrows arrive but OK doesn't (or OK
+arrives as something odd), capture `cec-ctl -d /dev/cec0 --monitor`
+output while pressing keys and add the TV to the table in
+[docs/hardware.md](hardware.md).
