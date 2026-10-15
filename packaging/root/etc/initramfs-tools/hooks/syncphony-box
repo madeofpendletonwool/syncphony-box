@@ -1,0 +1,24 @@
+#!/bin/sh
+# The read-only root's initramfs needs (MAD-805, MAD-846, ADR 0007/0013).
+#
+# The overlay script fsck's /data (e2fsck -p LABEL=syncphony-data) before
+# mounting it. initramfs-tools' own fsck hook only copies the checker for
+# the root filesystem type it finds in /etc/fstab, and the x86 root is
+# built by live-build with no root line there, so without this the check
+# would fail with "not found" and /data would never mount early. The
+# overlay module rides along for the same reason (the modules list has it
+# too).
+
+PREREQ=""
+prereqs() { echo "${PREREQ}"; }
+case "$1" in
+prereqs)
+	prereqs
+	exit 0
+	;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec /usr/sbin/e2fsck /sbin
+manual_add_modules overlay

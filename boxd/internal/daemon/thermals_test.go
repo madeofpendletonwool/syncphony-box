@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -141,5 +143,79 @@ func TestThermalsAbsentWithoutVcgencmd(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &m)
 	if _, ok := m["temperatureC"]; ok {
 		t.Fatal("no-vcgencmd daemon must not report thermals")
+	}
+}
+
+// fakeZone makes a /sys/class/thermal-style zone under dir.
+func fakeZone(t *testing.T, dir, name, typ, temp string) {
+	t.Helper()
+	z := filepath.Join(dir, name)
+	if err := os.MkdirAll(z, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(z, "type"), []byte(typ+"\n"), 0o644)
+	if temp != "" {
+		os.WriteFile(filepath.Join(z, "temp"), []byte(temp+"\n"), 0o644)
+	}
+}
+
+func TestPickThermalZonePrefersTheCPUPackage(t *testing.T) {
+	dir := t.TempDir()
+	fakeZone(t, dir, "thermal_zone0", "acpitz", "40000")
+	fakeZone(t, dir, "thermal_zone1", "iwlwifi_1", "35000")
+	fakeZone(t, dir, "thermal_zone2", "x86_pkg_temp", "51500")
+	fakeZone(t, dir, "thermal_zone3", "x86_pkg_temp", "") // no temp: skipped
+	zone, ok := pickThermalZone(dir)
+	if !ok || filepath.Base(zone) != "thermal_zone2" {
+		t.Fatalf("picked %q, %v", zone, ok)
+	}
+
+	// Only an unranked zone: still better than nothing.
+	dir2 := t.TempDir()
+	fakeZone(t, dir2, "thermal_zone0", "iwlwifi_1", "35000")
+	if zone, ok := pickThermalZone(dir2); !ok || filepath.Base(zone) != "thermal_zone0" {
+		t.Fatalf("fallback picked %q, %v", zone, ok)
+	}
+
+	if _, ok := pickThermalZone(t.TempDir()); ok {
+		t.Fatal("picked a zone in an empty dir")
+	}
+}
+
+func TestThermalsFromSysfsWithoutVcgencmd(t *testing.T) {
+	// An x86 box (MAD-846): no vcgencmd, a thermal zone instead. The
+	// temperature is reported; throttling flags are not (no source).
+	d, _ := newTestDaemon(t, "server_url=https://s.example\n")
+	d.thermalDir = t.TempDir()
+	fakeZone(t, d.thermalDir, "thermal_zone0", "x86_pkg_temp", "47250")
+	d.vcgencmd = func(args ...string) (string, error) { return "", exec.ErrNotFound }
+
+	if !d.sampleThermals() {
+		t.Fatal("sampling gave up despite a thermal zone")
+	}
+	rec := get(t, d.bridgeMux(), "/v1/info")
+	var m map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &m)
+	if m["temperatureC"] != 47.3 {
+		t.Fatalf("temperatureC = %v", m["temperatureC"])
+	}
+	for _, key := range []string{"throttled", "underVoltage", "throttleOccurred"} {
+		if _, ok := m[key]; ok {
+			t.Fatalf("sysfs sample reports %q", key)
+		}
+	}
+
+	// Later samples read the zone directly; vcgencmd isn't asked again.
+	d.vcgencmd = func(args ...string) (string, error) {
+		t.Fatal("vcgencmd asked again after falling back")
+		return "", nil
+	}
+	os.WriteFile(filepath.Join(d.thermalDir, "thermal_zone0", "temp"), []byte("60000\n"), 0o644)
+	d.sampleThermals()
+	rec = get(t, d.bridgeMux(), "/v1/info")
+	m = nil
+	json.Unmarshal(rec.Body.Bytes(), &m)
+	if m["temperatureC"] != 60.0 {
+		t.Fatalf("second sample temperatureC = %v", m["temperatureC"])
 	}
 }

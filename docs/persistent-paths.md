@@ -2,8 +2,8 @@
 
 The root filesystem is read-only behind an overlay (ADR 0007): everything
 written under `/` at runtime lands in a tmpfs and vanishes at power-off.
-Anything that must survive lives on `/data`, the third partition (label
-`syncphony-data`). This page is the complete list — when a path is added
+Anything that must survive lives on `/data`, the partition labelled
+`syncphony-data` (the third on a Pi's card, the fourth on a PC's disk). This page is the complete list — when a path is added
 to or moved off `/data`, this list changes in the same commit.
 
 | path | lives at | put there by | what it is |
@@ -23,7 +23,14 @@ Not on `/data`, still persistent:
 
 | path | where | what |
 |---|---|---|
-| `syncphony.txt` | the FAT boot partition (`/boot/firmware`) | the box's config, editable from any computer; written only through the remount dance (rw → write → sync → ro) |
+| `syncphony.txt` | the FAT boot partition (`/boot/firmware`; on a PC box, the EFI system partition `SB-BOOT`) | the box's config, editable from any computer; written only through the remount dance (rw → write → sync → ro) |
+| kernel command line | `/boot/firmware/cmdline.txt` on a Pi, `/boot/firmware/cmdline.cfg` (GRUB) on a PC | boxd's `video=` token from `resolution=`/`rotate=` (ADR 0013) |
+
+The x86 live session (the ISO booted from a USB stick, ADR 0013) has no
+boot partition. With a `syncphony-data` partition on the stick, the
+whole list above applies, and `syncphony.txt` lives at
+`/data/boot-firmware/syncphony.txt` (bind-mounted at `/boot/firmware`).
+Without one, everything is in RAM for that session.
 
 Everything else is deliberately throwaway: apt state, Chromium cache,
 `$HOME`, `systemd`'s runtime state. The overlay discarding them is the

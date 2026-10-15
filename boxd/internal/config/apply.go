@@ -26,7 +26,7 @@ func PathsFromEnv() Paths {
 	return Paths{
 		Txt:         envOr("SB_TXT", DefaultTxtPath),
 		Env:         envOr("SB_ENV", DefaultEnvPath),
-		Cmdline:     envOr("SB_CMDLINE", DefaultCmdlinePath),
+		Cmdline:     envOr("SB_CMDLINE", defaultCmdlinePath()),
 		ProfileDir:  os.Getenv("SB_PROFILE"),
 		HostnameCmd: os.Getenv("SB_HOSTNAME_CMD"),
 		RebootCmd:   os.Getenv("SB_REBOOT_CMD"),
@@ -38,6 +38,67 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// defaultCmdlinePath picks the box's kernel command line file: GRUB's
+// cmdline.cfg on an installed x86 box, the Pi's cmdline.txt otherwise.
+func defaultCmdlinePath() string {
+	if _, err := os.Stat(DefaultGrubCmdlinePath); err == nil {
+		return DefaultGrubCmdlinePath
+	}
+	return DefaultCmdlinePath
+}
+
+// grubCmdlineVar is the variable cmdline.cfg sets; the x86 grub.cfg
+// passes ${syncphony_cmdline} to the kernel.
+const grubCmdlineVar = "syncphony_cmdline"
+
+// isGrubCmdline reports whether a command line file is the x86 GRUB
+// script (cmdline.cfg) rather than the Pi's one-line cmdline.txt.
+func isGrubCmdline(path string) bool {
+	return strings.HasSuffix(path, ".cfg")
+}
+
+// cmdlineTokens extracts the kernel command line from a file's content:
+// the whole file for cmdline.txt, the quoted value of the
+// `set syncphony_cmdline="..."` line for cmdline.cfg.
+func cmdlineTokens(path, content string) string {
+	if !isGrubCmdline(path) {
+		return strings.Map(func(r rune) rune {
+			if r == '\r' || r == '\n' {
+				return -1
+			}
+			return r
+		}, content)
+	}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "set "+grubCmdlineVar+"="); ok {
+			return strings.Trim(v, `"'`)
+		}
+	}
+	return ""
+}
+
+// cmdlineContent is cmdlineTokens' inverse: the new file content for a
+// command line. cmdline.cfg keeps its other lines (the comments) and
+// gets its set line replaced, or appended when it had none.
+func cmdlineContent(path, old, line string) string {
+	if !isGrubCmdline(path) {
+		return line + "\n"
+	}
+	set := "set " + grubCmdlineVar + `="` + line + `"`
+	lines := strings.Split(strings.TrimSuffix(old, "\n"), "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "set "+grubCmdlineVar+"=") {
+			lines[i] = set
+			return strings.Join(lines, "\n") + "\n"
+		}
+	}
+	if old == "" {
+		return set + "\n"
+	}
+	return strings.Join(append(lines, set), "\n") + "\n"
 }
 
 // RunCommand runs an external command (systemctl and friends). A stub in
@@ -157,21 +218,25 @@ func runSh(command, arg0, arg1 string, run RunCommand) error {
 // line: drop any previous one, append the desired one. Changing it takes a
 // reboot, which happens exactly once — after the write the next boot
 // computes the same token and finds nothing to do.
+//
+// No command line file at all means no bootloader reads one: the x86 live
+// session boots from the read-only ISO (MAD-846). Writing one there would
+// only cost a pointless reboot, so the display settings are skipped.
 func syncCmdline(resolution, rotate string, p Paths, run RunCommand, log *log.Logger) {
 	desired := VideoToken(resolution, rotate)
 	current := ""
+	old := ""
 	if data, err := os.ReadFile(p.Cmdline); err == nil {
-		current = strings.Map(func(r rune) rune {
-			if r == '\r' || r == '\n' {
-				return -1
-			}
-			return r
-		}, string(data))
-	} else if !os.IsNotExist(err) {
-		// Unreadable (a directory, say): behave as empty and let the write
-		// below fail loudly instead.
-		current = ""
+		old = string(data)
+		current = cmdlineTokens(p.Cmdline, old)
+	} else if os.IsNotExist(err) {
+		if desired != "" {
+			log.Printf("boxd config: no kernel command line here (%s); resolution and rotate are not applied", p.Cmdline)
+		}
+		return
 	}
+	// Otherwise unreadable (a directory, say): behave as empty and let the
+	// write below fail loudly instead.
 
 	var kept []string
 	for _, tok := range strings.Fields(current) {
@@ -196,7 +261,7 @@ func syncCmdline(resolution, rotate string, p Paths, run RunCommand, log *log.Lo
 	// /boot/firmware stays read-only (ADR 0007): the write goes through the
 	// remount dance, so a power pull can never catch the FAT half-written.
 	err := WithMountWritable(p.Cmdline, run, log, func() error {
-		return os.WriteFile(p.Cmdline, []byte(next+"\n"), 0o644)
+		return os.WriteFile(p.Cmdline, []byte(cmdlineContent(p.Cmdline, old, next)), 0o644)
 	})
 	if err != nil {
 		log.Printf("boxd config: cannot write %s; display settings stay as they are: %v", p.Cmdline, err)

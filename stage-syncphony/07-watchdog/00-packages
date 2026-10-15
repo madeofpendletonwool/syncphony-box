@@ -1,6 +1,0 @@
-# Watchdogs and self-healing (MAD-806): vcgencmd (raspi-utils-core) is
-# what boxd samples every minute for the temperature and throttling log,
-# and systemd-timesyncd gives the box a sane clock before the kiosk starts
-# (a Pi has no RTC battery by default).
-raspi-utils-core
-systemd-timesyncd

@@ -1,0 +1,29 @@
+# Keep the image small (MAD-809: the Pi image under about 1 GB
+# compressed, which the smoke test enforces). The syncphony-box package
+# ships a dpkg path-exclude drop-in (/etc/dpkg/dpkg.cfg.d/50-syncphony-slim)
+# so nothing installed after it (later steps, nightly updates) brings
+# documentation, man pages or translations. This step removes what was
+# installed before it, following the same rules: the copyright files and
+# the English locale stay.
+
+# Documentation, except the copyright files.
+find /usr/share/doc -mindepth 1 ! -type d ! -name copyright -delete 2>/dev/null || true
+find /usr/share/doc -mindepth 1 -type d -empty -delete 2>/dev/null || true
+
+rm -rf /usr/share/man/* /usr/share/info/* /usr/share/lintian/*
+
+# Translations, except English and the alias table.
+find /usr/share/locale -mindepth 1 -maxdepth 1 \
+	! -name 'en' ! -name 'en_US' ! -name 'locale.alias' \
+	-exec rm -rf {} + 2>/dev/null || true
+
+# Chromium's UI strings: the box never shows Chromium's own UI, and its
+# en-US pack is the fallback for every other locale.
+if [ -d /usr/lib/chromium/locales ]; then
+	find /usr/lib/chromium/locales -type f ! -name 'en-US.pak*' -delete
+fi
+
+# Nothing reads the apt list cache offline; the nightly update refreshes
+# it before every upgrade.
+rm -rf /var/lib/apt/lists/*
+apt-get clean

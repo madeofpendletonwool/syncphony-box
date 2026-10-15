@@ -1,0 +1,25 @@
+[Unit]
+Description=Syncphony Box installer (the "Install to disk" boot entry)
+Documentation=https://github.com/madeofpendletonwool/syncphony-box/blob/main/docs/adr/0013-x86-iso.md
+# Only when the x86 ISO's install entry put this token on the command
+# line (MAD-846). The kiosk and boxd stay off then (their drop-ins), so
+# the installer has tty1 to itself.
+ConditionKernelCommandLine=syncphony.install
+Conflicts=getty@tty1.service
+After=systemd-user-sessions.service getty@tty1.service systemd-udev-settle.service
+
+[Service]
+Type=idle
+ExecStart=/usr/sbin/syncphony-install
+StandardInput=tty
+StandardOutput=tty
+# whiptail draws on stderr (the installer swaps it with stdout to read
+# the answers), so both go to the terminal; its own log goes to the journal.
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Environment=TERM=linux
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+#!/bin/sh
+# live-build configuration for the x86-64 live/installer ISO (MAD-846, ADR
+# 0013). `lb config` runs this; ./build-iso.sh runs lb in a Debian Trixie
+# container.
+#
+# The box itself comes from the shared customise layer (rootfs/, the same
+# one the Pi image runs), through the chroot hook in
+# config/hooks/normal/. Firmware is picked there too
+# (rootfs/packages/x86.list), not by live-build's catch-all.
+set -e
+
+lb config noauto \
+	--mode debian \
+	--distribution trixie \
+	--architecture amd64 \
+	--archive-areas "main contrib non-free-firmware" \
+	--linux-flavours amd64 \
+	--initramfs live-boot \
+	--binary-images iso-hybrid \
+	--bootloaders grub-pc,grub-efi \
+	--debian-installer none \
+	--firmware-binary false \
+	--firmware-chroot false \
+	--apt-recommends false \
+	--apt-indices false \
+	--memtest none \
+	--image-name syncphony-box \
+	--iso-application "Syncphony Box" \
+	--iso-volume "SYNCPHONY_BOX" \
+	--bootappend-live "boot=live quiet splash loglevel=3 vt.global_cursor_default=0 consoleblank=0" \
+	"${@}"

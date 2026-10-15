@@ -73,11 +73,43 @@ jobs:
             deploy/*.img.info
             deploy/*.deb
 
+  iso:
+    # The x86-64 live/installer ISO (MAD-846, ADR 0013): live-build in a
+    # Debian Trixie container, natively on an x86 runner. Same customise
+    # layer as the Pi image, so the same smoke test covers its rootfs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: boxd/go.mod
+
+      - name: Build ISO
+        run: make iso
+
+      - name: Smoke test
+        run: scripts/smoke-test.sh deploy/syncphony-box-*-amd64.iso
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: syncphony-box-iso-${{ github.sha }}
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            deploy/*.iso
+            deploy/*.iso.sha256
+            deploy/*_amd64.deb
+
   release:
-    # Tags only: publish what the image job built and smoke-tested
-    # (MAD-809/MAD-810, ADR 0011 and 0012).
+    # Tags only: publish what the image and iso jobs built and smoke-tested
+    # (MAD-809/MAD-810/MAD-846, ADR 0011, 0012 and 0013).
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [tests, image]
+    needs: [tests, image, iso]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -93,7 +125,8 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: syncphony-box-image-${{ github.sha }}
+          pattern: syncphony-box-*-${{ github.sha }}
+          merge-multiple: true
           path: deploy
 
       - name: Check the release inputs
@@ -111,9 +144,13 @@ jobs:
           scripts/changelog-section.sh "${VERSION}" > notes.md
           IMAGE="deploy/syncphony-box-${GITHUB_REF_NAME}-arm64.img.xz"
           DEB="deploy/syncphony-box_${VERSION}_arm64.deb"
-          ls -l "${IMAGE}" "${DEB}"
+          ISO="deploy/syncphony-box-${GITHUB_REF_NAME}-amd64.iso"
+          DEB_AMD64="deploy/syncphony-box_${VERSION}_amd64.deb"
+          ls -l "${IMAGE}" "${DEB}" "${ISO}" "${DEB_AMD64}"
           echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
           echo "DEB=${DEB}" >> "$GITHUB_ENV"
+          echo "ISO=${ISO}" >> "$GITHUB_ENV"
+          echo "DEB_AMD64=${DEB_AMD64}" >> "$GITHUB_ENV"
 
       - uses: sigstore/cosign-installer@v3
         with:
@@ -123,7 +160,8 @@ jobs:
         run: |
           set -euo pipefail
           cd deploy
-          sha256sum "$(basename "${IMAGE}")" "$(basename "${DEB}")" > SHA256SUMS
+          sha256sum "$(basename "${IMAGE}")" "$(basename "${DEB}")" \
+            "$(basename "${ISO}")" "$(basename "${DEB_AMD64}")" > SHA256SUMS
           # Keyless: the signature binds SHA256SUMS to this workflow run at
           # this tag (Sigstore's transparency log records it).
           cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
@@ -148,6 +186,7 @@ jobs:
             --notes-file notes.md \
             --verify-tag \
             "${IMAGE}" "${IMAGE}.sha256" "${DEB}" \
+            "${ISO}" "${ISO}.sha256" "${DEB_AMD64}" \
             deploy/SHA256SUMS deploy/SHA256SUMS.sigstore.json \
             imager/os_list.json
 
@@ -170,7 +209,7 @@ jobs:
             git worktree add --orphan -b gh-pages site
           fi
 
-          scripts/apt-repo.sh site/apt "${DEB}"
+          scripts/apt-repo.sh site/apt "${DEB}" "${DEB_AMD64}"
           cp packaging/apt/syncphony-box-archive-keyring.asc site/apt/
           mkdir -p site/imager
           cp imager/os_list.json site/imager/os_list.json

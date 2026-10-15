@@ -242,6 +242,51 @@ volume_100_sink() {
 	' "${FIXTURE}" > "${FIXTURE}.new" && mv "${FIXTURE}.new" "${FIXTURE}"
 }
 
+# A PC (the x86 box, MAD-846): Intel HDA with the analog jack and two
+# HDMI/DisplayPort outputs, PipeWire's usual names for them.
+sinks_pc() {
+	cat > "${FIXTURE}" <<'EOF2'
+Sink #50
+	State: SUSPENDED
+	Name: alsa_output.pci-0000_00_1f.3.analog-stereo
+	Description: Built-in Audio Analog Stereo
+	Driver: PipeWire
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	Properties:
+		alsa.card_name = "HDA Intel PCH"
+		alsa.name = "ALC233 Analog"
+		device.bus = "pci"
+		device.description = "Built-in Audio Analog Stereo"
+
+Sink #51
+	State: SUSPENDED
+	Name: alsa_output.pci-0000_00_1f.3.hdmi-stereo
+	Description: Built-in Audio Digital Stereo (HDMI)
+	Driver: PipeWire
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	Properties:
+		alsa.card_name = "HDA Intel PCH"
+		alsa.name = "HDMI 0"
+		device.bus = "pci"
+		device.description = "Built-in Audio Digital Stereo (HDMI)"
+
+Sink #52
+	State: SUSPENDED
+	Name: alsa_output.pci-0000_00_1f.3.hdmi-stereo-extra1
+	Description: Built-in Audio Digital Stereo (HDMI 2)
+	Driver: PipeWire
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	Properties:
+		alsa.card_name = "HDA Intel PCH"
+		alsa.name = "HDMI 1"
+		device.bus = "pci"
+		device.description = "Built-in Audio Digital Stereo (HDMI 2)"
+EOF2
+}
+
 HDMI0=alsa_output.platform-fef00700.hdmi.stereo-fallback
 HDMI1=alsa_output.platform-fef00710.hdmi.stereo-fallback
 JACK=alsa_output.platform-b1.stereo-fallback
@@ -406,4 +451,46 @@ called() { grep -Fqx "$*" "${CALLS}"; }
 	[ "$status" -eq 124 ]
 	# The initial apply plus the event-driven re-apply.
 	[ "$(grep -c '^set-default-sink' "${CALLS}")" -ge 2 ]
+}
+
+# --- x86 (MAD-846) -------------------------------------------------------------
+
+PC_ANALOG=alsa_output.pci-0000_00_1f.3.analog-stereo
+PC_HDMI=alsa_output.pci-0000_00_1f.3.hdmi-stereo
+PC_HDMI2=alsa_output.pci-0000_00_1f.3.hdmi-stereo-extra1
+
+@test "hdmi on a PC picks the first HDMI/DisplayPort sink" {
+	sinks_pc
+	set_audio hdmi
+	apply
+	[ "$status" -eq 0 ]
+	called "set-default-sink ${PC_HDMI}"
+}
+
+@test "hdmi2 on a PC picks the second HDMI/DisplayPort sink" {
+	sinks_pc
+	set_audio hdmi2
+	apply
+	[ "$status" -eq 0 ]
+	called "set-default-sink ${PC_HDMI2}"
+}
+
+@test "analog on a PC picks the built-in analog output" {
+	sinks_pc
+	set_audio analog
+	apply
+	[ "$status" -eq 0 ]
+	called "set-default-sink ${PC_ANALOG}"
+}
+
+@test "the PC fallback never applies on a Pi with HDMI0 absent" {
+	# TV on HDMI0 off: only HDMI1 is there. A Pi must not silently play
+	# out of the other port.
+	sinks_pi4
+	sed -i '/^Sink #41/,/^Sink #42/{/^Sink #42/!d}' "${FIXTURE}"
+	! grep -q "${HDMI0}" "${FIXTURE}"
+	set_audio hdmi
+	apply
+	[ "$status" -eq 0 ]
+	! called "set-default-sink ${HDMI1}"
 }

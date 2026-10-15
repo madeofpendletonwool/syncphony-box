@@ -7,6 +7,8 @@
 #   - builds boxd and the syncphony-box .deb (scripts/build-deb.sh), which
 #     the custom stage installs — and which lands in deploy/ too, for the
 #     apt repo (ADR 0012)
+#   - hands the custom stage the shared customise layer (rootfs/, the same
+#     one the x86 ISO build runs; ADR 0013) next to the .deb
 #   - neutralizes stage2's EXPORT_IMAGE (pi-gen's documented SKIP_IMAGES
 #     mechanism) so only stage-syncphony exports an image
 #   - adds the third (/data) partition after export (scripts/
@@ -46,9 +48,14 @@ mkdir -p .build
 
 rm -rf .build/deb
 DEB="$(scripts/build-deb.sh arm64 .build/boxd-arm64 .build/deb)"
-mkdir -p stage-syncphony/00-packages/files
-cp "${DEB}" stage-syncphony/00-packages/files/syncphony-box.deb
 echo "Packaged ${DEB}"
+
+# The stage's inputs: the package and the shared customise layer.
+STAGE_FILES=stage-syncphony/00-customise/files
+rm -rf "${STAGE_FILES}"
+mkdir -p "${STAGE_FILES}"
+cp "${DEB}" "${STAGE_FILES}/syncphony-box.deb"
+cp -a rootfs "${STAGE_FILES}/rootfs"
 
 # Only stage-syncphony/EXPORT_IMAGE (empty IMG_SUFFIX) exports an image.
 touch pi-gen/stage2/SKIP_IMAGES

@@ -71,14 +71,16 @@ workflow's own GitHub identity.
    git push origin vX.Y.Z
    ```
 
-4. The `build` workflow builds and smoke-tests the image, then the
-   `release` job publishes:
+4. The `build` workflow builds and smoke-tests the Pi image and the x86
+   ISO, then the `release` job publishes:
    - the GitHub Release: `syncphony-box-vX.Y.Z-arm64.img.xz` (+ `.sha256`),
-     `syncphony-box_X.Y.Z_arm64.deb`, `SHA256SUMS`,
-     `SHA256SUMS.sigstore.json`, `os_list.json`, and the changelog
-     section as the notes;
-   - on `gh-pages`: the .deb added to the apt repo (re-signed), and
-     `imager/os_list.json` pointing at the new image.
+     `syncphony-box-vX.Y.Z-amd64.iso` (+ `.sha256`),
+     `syncphony-box_X.Y.Z_arm64.deb` and `_amd64.deb`, `SHA256SUMS`
+     over all four, `SHA256SUMS.sigstore.json`, `os_list.json`, and the
+     changelog section as the notes;
+   - on `gh-pages`: both .debs added to the apt repo (re-signed), and
+     `imager/os_list.json` pointing at the new Pi image (the listing is
+     Pi-only; ADR 0013).
 5. Boxes pick it up at their next 04:00. To see one take it right away:
    `sudo syncphony-box update` on the box.
 
@@ -105,6 +107,7 @@ the next night retries. Details: `journalctl -u syncphony-update` and
 `/data/syncphony-box/update.json`.
 
 If a box doesn't come back after an update: reflash the card with the
-current release in Imager and pair it again from the room. There are no
+current release in Imager (on a PC, reinstall from the current ISO) and
+pair it again from the room. There are no
 A/B partitions to fall back to (ADR 0012). Please open an issue with
 what the box was running (the Screens list shows the version).

@@ -196,6 +196,87 @@ func TestApplyWritesEnvAndSyncsCmdline(t *testing.T) {
 	}
 }
 
+func TestApplySyncsGrubCmdline(t *testing.T) {
+	// The x86 box (MAD-846): the command line is a GRUB script on the
+	// EFI partition; only the set line changes, the comments stay.
+	dir := t.TempDir()
+	txt := filepath.Join(dir, "syncphony.txt")
+	cfg := filepath.Join(dir, "cmdline.cfg")
+	rebooted := filepath.Join(dir, "rebooted")
+	os.WriteFile(cfg, []byte("# written by syncphony-install\nset syncphony_cmdline=\"boot=overlay quiet\"\n"), 0o644)
+	os.WriteFile(txt, []byte("resolution=1280x720\nrotate=90\n"), 0o644)
+
+	p := Paths{Txt: txt, Env: filepath.Join(dir, "config.env"), Cmdline: cfg,
+		HostnameCmd: "true", RebootCmd: "touch " + rebooted}
+	Apply(p, func(string, ...string) error { return nil }, testLogger())
+
+	got, _ := os.ReadFile(cfg)
+	want := "# written by syncphony-install\nset syncphony_cmdline=\"boot=overlay quiet video=HDMI-A-1:1280x720D,rotate=90\"\n"
+	if string(got) != want {
+		t.Fatalf("cmdline.cfg = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(rebooted); err != nil {
+		t.Fatal("did not reboot on a cmdline change")
+	}
+
+	// Unchanged config: no write, no reboot loop.
+	os.Remove(rebooted)
+	Apply(p, func(string, ...string) error { return nil }, testLogger())
+	if _, err := os.Stat(rebooted); !os.IsNotExist(err) {
+		t.Fatal("rebooted again for an unchanged cmdline.cfg")
+	}
+
+	// Back to auto: the token goes, the rest stays.
+	os.WriteFile(txt, []byte("\n"), 0o644)
+	Apply(p, func(string, ...string) error { return nil }, testLogger())
+	got, _ = os.ReadFile(cfg)
+	if want := "# written by syncphony-install\nset syncphony_cmdline=\"boot=overlay quiet\"\n"; string(got) != want {
+		t.Fatalf("cmdline.cfg after reset = %q, want %q", got, want)
+	}
+}
+
+func TestCmdlineTokensAndContent(t *testing.T) {
+	for _, tc := range []struct {
+		path, content, tokens string
+	}{
+		{"cmdline.txt", "a b c\r\n", "a b c"},
+		{"cmdline.cfg", "set syncphony_cmdline=\"a b\"\n", "a b"},
+		{"cmdline.cfg", "# no set line\n", ""},
+		{"cmdline.cfg", "  set syncphony_cmdline='a'  \n", "a"},
+	} {
+		if got := cmdlineTokens(tc.path, tc.content); got != tc.tokens {
+			t.Errorf("cmdlineTokens(%q, %q) = %q, want %q", tc.path, tc.content, got, tc.tokens)
+		}
+	}
+	// A cfg without a set line gets one appended; an empty one is just it.
+	if got := cmdlineContent("x.cfg", "# hi\n", "a"); got != "# hi\nset syncphony_cmdline=\"a\"\n" {
+		t.Errorf("append: %q", got)
+	}
+	if got := cmdlineContent("x.cfg", "", "a"); got != "set syncphony_cmdline=\"a\"\n" {
+		t.Errorf("empty: %q", got)
+	}
+}
+
+func TestApplySkipsDisplayWithoutCmdline(t *testing.T) {
+	// The x86 live session has no command line file: resolution= must not
+	// create one or reboot (nothing would read it).
+	dir := t.TempDir()
+	txt := filepath.Join(dir, "syncphony.txt")
+	cmdline := filepath.Join(dir, "cmdline.txt")
+	rebooted := filepath.Join(dir, "rebooted")
+	os.WriteFile(txt, []byte("resolution=1920x1080\n"), 0o644)
+
+	p := Paths{Txt: txt, Env: filepath.Join(dir, "config.env"), Cmdline: cmdline,
+		HostnameCmd: "true", RebootCmd: "touch " + rebooted}
+	Apply(p, func(string, ...string) error { return nil }, testLogger())
+	if _, err := os.Stat(cmdline); !os.IsNotExist(err) {
+		t.Fatal("created a command line file nothing reads")
+	}
+	if _, err := os.Stat(rebooted); !os.IsNotExist(err) {
+		t.Fatal("rebooted without a command line file")
+	}
+}
+
 func TestApplySetsHostnameFromName(t *testing.T) {
 	dir := t.TempDir()
 	txt := filepath.Join(dir, "syncphony.txt")

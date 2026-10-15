@@ -1,0 +1,43 @@
+# x86-64 only, on top of common.list (MAD-846, ADR 0013). The kernel and
+# live-boot come from the live-build config (x86/live), not from here.
+
+# What Raspberry Pi OS Lite brings and a bare Debian root doesn't: the
+# logind session the kiosk's PAMName=login needs (seat access for cage),
+# the D-Bus it talks over, a text font for Chromium, and a busybox for the
+# initramfs's mount (the overlay script's lowerdir= options).
+libpam-systemd
+dbus
+fonts-dejavu-core
+busybox
+
+# Firmware for common PC hardware (non-free-firmware): GPUs, Wi-Fi, the
+# audio DSPs of recent Intel machines (SOF, with the UCM profiles
+# PipeWire needs to see their outputs), and CPU microcode.
+firmware-linux-free
+firmware-misc-nonfree
+firmware-intel-graphics
+firmware-amd-graphics
+firmware-iwlwifi
+firmware-realtek
+firmware-atheros
+firmware-sof-signed
+alsa-ucm-conf
+intel-microcode
+amd64-microcode
+
+# The installer (syncphony-install, the "Install to disk" boot entry):
+# partitioning, the filesystems, and GRUB for both firmware types. The
+# -bin packages only: grub-pc and grub-efi-amd64 would try to reinstall
+# the bootloader on every update.
+fdisk
+dosfstools
+e2fsprogs
+grub2-common
+grub-pc-bin
+grub-efi-amd64-bin
+whiptail
+
+# Maintenance: an installed box can get an admin user from the installer
+# (there is no Imager here), and SSH to reach it.
+sudo
+openssh-server
