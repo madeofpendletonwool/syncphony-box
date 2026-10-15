@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -39,6 +41,11 @@ const (
 	// portalQuiet, so a phone mid-form is never dropped.
 	recheckEvery = 5 * time.Minute
 	portalQuiet  = 2 * time.Minute
+
+	// tvQuiet: someone is choosing a network on the TV's own Wi-Fi screen
+	// (it pings /wifi/hold while in use). The hotspot doesn't start under
+	// them; it needs the radio the screen is scanning with.
+	tvQuiet = 30 * time.Second
 
 	dataPersist = "/usr/lib/syncphony-box/data-persist"
 )
@@ -87,6 +94,9 @@ type netState struct {
 	offlineSince time.Time      // no connection continuously since (zero = online)
 	seenOnline   bool           // this box has been online before (persisted)
 	lastPortal   time.Time      // last request to the captive portal
+	lastTV       time.Time      // last use of the TV's own Wi-Fi screen
+	deviceErr    string         // why there is no Wi-Fi device (yet)
+	startErr     string         // why the hotspot couldn't start, last time it tried
 }
 
 // netView is the locked snapshot decideNet runs on.
@@ -99,6 +109,7 @@ type netView struct {
 	offlineSince time.Time
 	apSince      time.Time
 	lastPortal   time.Time
+	lastTV       time.Time
 	savedWiFi    bool
 }
 
@@ -128,17 +139,23 @@ func decideNet(v netView) (netAction, string) {
 		}
 		return netNothing, ""
 	}
-	if v.online || v.offlineSince.IsZero() {
+	if v.online || v.offlineSince.IsZero() || v.now.Sub(v.lastTV) < tvQuiet {
 		return netNothing, ""
 	}
-	grace := bootGrace
-	if v.seenOnline {
-		grace = lostGrace
-	}
+	grace := hotspotGrace(v.seenOnline)
 	if v.now.Sub(v.offlineSince) >= grace {
 		return netStartAP, fmt.Sprintf("no Ethernet or Wi-Fi connection for %s", grace)
 	}
 	return netNothing, ""
+}
+
+// hotspotGrace is how long a box without a connection waits before it
+// starts the hotspot.
+func hotspotGrace(seenOnline bool) time.Duration {
+	if seenOnline {
+		return lostGrace
+	}
+	return bootGrace
 }
 
 // boxdDir is boxd's own state directory on /data (docs/persistent-paths.md);
@@ -187,10 +204,14 @@ func (d *Daemon) netWatch() {
 	logged := false
 	for {
 		dev, err := d.wifi.Device()
+		d.mu.Lock()
 		if err == nil {
-			d.mu.Lock()
-			d.net.device = dev
-			d.mu.Unlock()
+			d.net.device, d.net.deviceErr = dev, ""
+		} else {
+			d.net.deviceErr = err.Error()
+		}
+		d.mu.Unlock()
+		if err == nil {
 			break
 		}
 		if !logged {
@@ -236,6 +257,7 @@ func (d *Daemon) netTick(now time.Time) {
 		offlineSince: d.net.offlineSince,
 		apSince:      d.net.apSince,
 		lastPortal:   d.net.lastPortal,
+		lastTV:       d.net.lastTV,
 	}
 	d.mu.Unlock()
 	if first {
@@ -269,12 +291,17 @@ func (d *Daemon) startHotspot(reason string) {
 		d.log.Printf("boxd: wifi: cannot start the setup hotspot: %v", err)
 		d.mu.Lock()
 		d.net.phase = phaseNone
+		d.net.startErr = err.Error()    // the TV says why
 		d.net.offlineSince = time.Now() // re-arm the grace instead of retrying every tick
+		if nets != nil {
+			d.net.networks = nets // the TV's own Wi-Fi screen can still use them
+		}
 		d.mu.Unlock()
 		return
 	}
 	d.mu.Lock()
 	d.net.phase = phaseHotspot
+	d.net.startErr = ""
 	d.net.apSSID = ssid
 	d.net.apSince = time.Now()
 	if nets != nil {
@@ -319,14 +346,18 @@ func (d *Daemon) recheck() {
 	d.startHotspot("no saved network in range")
 }
 
-// joinWiFi is the save from the portal, run after the phone got its
-// answer: give the radio back, join, and on success persist the network
-// and (if the form had it) the server URL. On failure the hotspot comes
-// back and the TV shows why.
-func (d *Daemon) joinWiFi(ssid, password string, hidden bool, serverURL, name string) {
+// joinWiFi is the save from the portal (or the TV's own Wi-Fi screen),
+// run after the asker got its answer: give the radio back, join, and on
+// success persist the network and (if the form had it) the server URL.
+// On failure from the portal the hotspot comes back and the TV shows
+// why; from the TV, its Wi-Fi screen shows why and the hotspot keeps to
+// its usual timing.
+func (d *Daemon) joinWiFi(ssid, password string, hidden bool, serverURL, name string, fromTV bool) {
 	d.netOp.Lock()
 	defer d.netOp.Unlock()
-	time.Sleep(joinDelay)
+	if !fromTV {
+		time.Sleep(joinDelay)
+	}
 
 	d.mu.Lock()
 	dev := d.net.device
@@ -340,8 +371,13 @@ func (d *Daemon) joinWiFi(ssid, password string, hidden bool, serverURL, name st
 		d.mu.Lock()
 		d.net.joining = ""
 		d.net.lastError = capitalize(err.Error())
+		if fromTV {
+			d.net.lastTV = time.Now() // the screen is still in use: retry, not hotspot
+		}
 		d.mu.Unlock()
-		d.startHotspot("the join failed")
+		if !fromTV {
+			d.startHotspot("the join failed")
+		}
 		return
 	}
 
@@ -440,35 +476,18 @@ func (d *Daemon) handleWiFiSave(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		writePage(w, wifiFormHTML(d.wifiForm(msg)))
 	}
-	ssid := strings.TrimSpace(r.PostFormValue("other_ssid"))
-	if ssid == "" {
-		ssid = r.PostFormValue("ssid")
-	}
-	password := r.PostFormValue("password") // spaces are legal in a passphrase
+	ssid, password := joinRequest(r)
 	serverURL := strings.TrimSpace(r.PostFormValue("server_url"))
 	name := strings.TrimSpace(r.PostFormValue("name"))
 
-	if ssid == "" {
-		fail("Pick your Wi-Fi network, or type its name.")
+	known, problem := d.checkJoin(ssid, password)
+	if problem != "" {
+		fail(problem)
 		return
 	}
 	d.mu.Lock()
-	known, secure := false, false
-	for _, nw := range d.net.networks {
-		if nw.SSID == ssid {
-			known, secure = true, nw.Secure
-		}
-	}
 	askServer := d.cfg.ServerURL == ""
 	d.mu.Unlock()
-	if secure && password == "" {
-		fail(ssid + " needs its Wi-Fi password.")
-		return
-	}
-	if password != "" && (len(password) < 8 || len(password) > 64) {
-		fail("Wi-Fi passwords are 8 to 63 characters — check it and try again.")
-		return
-	}
 	if !askServer {
 		serverURL, name = "", ""
 	}
@@ -493,7 +512,42 @@ func (d *Daemon) handleWiFiSave(w http.ResponseWriter, r *http.Request) {
 
 	d.log.Printf("boxd: wifi: join %s requested from %s", ssid, r.RemoteAddr)
 	writePage(w, joiningPageHTML(ssid, apSSID))
-	go d.joinWiFi(ssid, password, !known, serverURL, name)
+	go d.joinWiFi(ssid, password, !known, serverURL, name, false)
+}
+
+// joinRequest reads the network and password from a join form: a typed
+// name (a network that isn't listed) wins over the picked one.
+func joinRequest(r *http.Request) (ssid, password string) {
+	ssid = strings.TrimSpace(r.PostFormValue("other_ssid"))
+	if ssid == "" {
+		ssid = r.PostFormValue("ssid")
+	}
+	return ssid, r.PostFormValue("password") // spaces are legal in a passphrase
+}
+
+// checkJoin vets a join against the last scan before anything changes,
+// so the asker sees the mistake while still connected. known says the
+// network was in the scan (one that wasn't is joined as hidden); problem
+// is what to tell them, empty when the join can go ahead.
+func (d *Daemon) checkJoin(ssid, password string) (known bool, problem string) {
+	if ssid == "" {
+		return false, "Pick your Wi-Fi network, or type its name."
+	}
+	d.mu.Lock()
+	secure := false
+	for _, nw := range d.net.networks {
+		if nw.SSID == ssid {
+			known, secure = true, nw.Secure
+		}
+	}
+	d.mu.Unlock()
+	if secure && password == "" {
+		return known, ssid + " needs its Wi-Fi password."
+	}
+	if password != "" && (len(password) < 8 || len(password) > 64) {
+		return known, "Wi-Fi passwords are 8 to 63 characters — check it and try again."
+	}
+	return known, ""
 }
 
 // handleHotspotScreen is the TV side: join the box's network (QR), then
@@ -524,15 +578,192 @@ func (d *Daemon) handleHotspotScreen(w http.ResponseWriter, r *http.Request) {
 	writePage(w, hotspotScreenHTML(data))
 }
 
-// wifiStatus is the hotspot's part of /status.
+// wifiStatus is the hotspot's part of /status. Beyond the phase: whether
+// the box has a Wi-Fi device at all (and why not), why the hotspot last
+// failed to start, and — while the box is offline and waiting — how many
+// seconds until it starts (hotspotIn), for the setup screen's countdown.
 func (d *Daemon) wifiStatus() map[string]any {
+	return d.wifiStatusAt(time.Now())
+}
+
+func (d *Daemon) wifiStatusAt(now time.Time) map[string]any {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return map[string]any{
-		"phase":   string(d.net.phase),
-		"hotspot": d.net.apSSID,
-		"joining": d.net.joining,
-		"error":   d.net.lastError,
-		"notice":  d.net.notice,
+	st := map[string]any{
+		"phase":      string(d.net.phase),
+		"hotspot":    d.net.apSSID,
+		"joining":    d.net.joining,
+		"error":      d.net.lastError,
+		"notice":     d.net.notice,
+		"device":     d.net.device != "",
+		"startError": d.net.startErr,
 	}
+	if d.net.device == "" {
+		st["unavailable"] = d.net.deviceErr
+	}
+	if d.net.device != "" && d.net.phase == phaseNone && d.net.joining == "" && !d.net.offlineSince.IsZero() {
+		left := hotspotGrace(d.net.seenOnline) - now.Sub(d.net.offlineSince)
+		st["hotspotIn"] = max(0, int((left+time.Second-1)/time.Second))
+	}
+	return st
+}
+
+// --- the TV's own Wi-Fi controls ------------------------------------------------
+//
+// For a box with a keyboard or a mouse (a PC, or a Pi with one plugged
+// in), or a remote for the buttons: start the hotspot now instead of
+// waiting out the grace, or skip the phone and pick the network on the
+// TV. Served on loopback only, to the kiosk's own pages (screenOnly).
+
+var errNetBusy = errors.New("the Wi-Fi is busy (a join or a check is running); try again in a moment")
+
+// startHotspotNow is the setup screen's "Start setup Wi-Fi now" button:
+// the hotspot without the grace. It returns once the request is vetted;
+// the scan and the access point come up in the background, and the
+// screen follows through /status.
+func (d *Daemon) startHotspotNow() error {
+	d.mu.Lock()
+	dev, phase, joining := d.net.device, d.net.phase, d.net.joining
+	d.mu.Unlock()
+	switch {
+	case dev == "":
+		return errors.New("this box has no Wi-Fi it can use")
+	case phase != phaseNone || joining != "":
+		return nil // already up, or about to be
+	}
+	if online, _ := d.wifi.Online(); online {
+		return errors.New("this box is already connected")
+	}
+	d.mu.Lock()
+	d.net.startErr = "" // this attempt's outcome, not the last one's
+	d.mu.Unlock()
+	go func() {
+		d.netOp.Lock()
+		defer d.netOp.Unlock()
+		d.mu.Lock()
+		busy := d.net.phase != phaseNone || d.net.joining != ""
+		d.mu.Unlock()
+		if !busy {
+			d.startHotspot("started from the TV")
+		}
+	}()
+	return nil
+}
+
+// scanForTV is the TV Wi-Fi screen's list: a fresh scan, which needs the
+// radio, so a running hotspot gives it up (whoever is at the TV chose to
+// set up here). It holds the hotspot off for tvQuiet from now.
+func (d *Daemon) scanForTV() ([]wifi.Network, error) {
+	if !d.netOp.TryLock() {
+		return nil, errNetBusy
+	}
+	defer d.netOp.Unlock()
+	d.mu.Lock()
+	dev, phase := d.net.device, d.net.phase
+	d.net.lastTV = time.Now()
+	d.mu.Unlock()
+	if dev == "" {
+		return nil, errors.New("this box has no Wi-Fi it can use")
+	}
+	if phase == phaseHotspot {
+		d.stopHotspot("Wi-Fi is being set up on the TV")
+	}
+	nets, err := d.wifi.Scan(dev)
+	if err != nil {
+		d.log.Printf("boxd: wifi: scan from the TV: %v", err)
+		return nil, fmt.Errorf("couldn't look for networks: %w", err)
+	}
+	d.mu.Lock()
+	d.net.networks = nets
+	d.mu.Unlock()
+	return nets, nil
+}
+
+func (d *Daemon) handleWiFiScreen(w http.ResponseWriter, r *http.Request) {
+	d.holdForTV()
+	writePage(w, wifiScreenHTML())
+}
+
+func (d *Daemon) holdForTV() {
+	d.mu.Lock()
+	d.net.lastTV = time.Now()
+	d.mu.Unlock()
+}
+
+func (d *Daemon) handleWiFiHold(w http.ResponseWriter, r *http.Request) {
+	d.holdForTV()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (d *Daemon) handleWiFiHotspotNow(w http.ResponseWriter, r *http.Request) {
+	if err := d.startHotspotNow(); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": capitalize(err.Error()) + "."})
+		return
+	}
+	d.log.Printf("boxd: wifi: setup hotspot requested from the TV")
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+}
+
+func (d *Daemon) handleWiFiScan(w http.ResponseWriter, r *http.Request) {
+	nets, err := d.scanForTV()
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": capitalize(err.Error())})
+		return
+	}
+	list := make([]map[string]any, 0, len(nets))
+	for _, nw := range nets {
+		list = append(list, map[string]any{"ssid": nw.SSID, "signal": nw.Signal, "secure": nw.Secure})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"networks": list})
+}
+
+// handleWiFiJoin is the TV Wi-Fi screen's Connect: the same checks as
+// the portal's form, then the join in the background (the screen follows
+// it through /status).
+func (d *Daemon) handleWiFiJoin(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Bad request."})
+		return
+	}
+	ssid, password := joinRequest(r)
+	known, problem := d.checkJoin(ssid, password)
+	if problem != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": problem})
+		return
+	}
+	d.mu.Lock()
+	if busy := d.net.joining; busy != "" {
+		d.mu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "Already joining " + busy + "."})
+		return
+	}
+	d.net.joining = ssid
+	d.net.lastError, d.net.notice = "", ""
+	d.net.lastTV = time.Now()
+	d.mu.Unlock()
+	d.log.Printf("boxd: wifi: join %s requested from the TV", ssid)
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	go d.joinWiFi(ssid, password, !known, "", "", true)
+}
+
+// screenOnly admits only the kiosk's own pages: addressed as loopback
+// (no DNS rebinding) and, when the browser says where the request comes
+// from, from boxd's own origin — not the server's page, not anything else.
+func screenOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		own := strings.TrimPrefix(origin, "http://")
+		if !allowedHost(r.Host) || (origin != "" && (own == origin || !allowedHost(own))) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
 }

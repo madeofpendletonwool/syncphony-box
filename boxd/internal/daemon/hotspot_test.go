@@ -22,6 +22,7 @@ type fakeNet struct {
 	saved      bool
 	nets       []wifi.Network
 	connectErr error
+	startErr   error
 	apUp       bool
 	calls      []string
 	// onConnect runs inside Connect (a join can bring the box online).
@@ -54,6 +55,9 @@ func (f *fakeNet) StartAP(dev, ssid string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log("start " + ssid)
+	if f.startErr != nil {
+		return f.startErr
+	}
 	f.apUp = true
 	return nil
 }
@@ -425,5 +429,156 @@ func TestScreensFollowTheHotspot(t *testing.T) {
 	st := get(t, d.bridgeMux(), "/status").Body.String()
 	if !strings.Contains(st, `"wifiSetup":true`) || !strings.Contains(st, `"hotspot":"Syncphony-Box-ABCD"`) {
 		t.Errorf("/status = %s", st)
+	}
+}
+
+// --- the TV's own Wi-Fi controls ---------------------------------------------------
+
+func TestDecideNetWaitsForTheTVScreen(t *testing.T) {
+	t0 := time.Date(2026, 10, 15, 20, 0, 0, 0, time.UTC)
+	v := netView{now: t0, offlineSince: t0.Add(-time.Hour), lastTV: t0.Add(-10 * time.Second)}
+	if got, _ := decideNet(v); got != netNothing {
+		t.Errorf("hotspot started under the TV's Wi-Fi screen: %q", got)
+	}
+	v.lastTV = t0.Add(-tvQuiet)
+	if got, _ := decideNet(v); got != netStartAP {
+		t.Errorf("hotspot held after the TV screen went quiet: %q", got)
+	}
+}
+
+func TestStatusCountsDownToTheHotspot(t *testing.T) {
+	d, _, _ := newHotspotDaemon(t, "")
+	t0 := time.Now()
+	d.netTick(t0)
+	st := d.wifiStatusAt(t0.Add(15 * time.Second))
+	if st["hotspotIn"] != 45 || st["device"] != true {
+		t.Fatalf("status = %v, want hotspotIn 45 with a device", st)
+	}
+	if st := d.wifiStatusAt(t0.Add(2 * bootGrace)); st["hotspotIn"] != 0 {
+		t.Errorf("hotspotIn past the grace = %v, want 0", st["hotspotIn"])
+	}
+	upHotspot(t, d)
+	if _, ok := d.wifiStatus()["hotspotIn"]; ok {
+		t.Error("a countdown with the hotspot already up")
+	}
+
+	// No Wi-Fi device: no countdown, and the reason.
+	d2, _, _ := newHotspotDaemon(t, "")
+	d2.net.device, d2.net.deviceErr = "", "no Wi-Fi device"
+	if st := d2.wifiStatus(); st["device"] != false || st["unavailable"] != "no Wi-Fi device" || st["hotspotIn"] != nil {
+		t.Errorf("no-device status = %v", st)
+	}
+}
+
+func TestStartHotspotNowFromTheTV(t *testing.T) {
+	d, _, f := newHotspotDaemon(t, "")
+	d.netTick(time.Now()) // offline, well inside the grace
+	rec := post(t, d.bridgeMux(), "/wifi/hotspot", "", "Origin", "http://127.0.0.1:8099")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("start now: %d %s", rec.Code, rec.Body)
+	}
+	waitFor(t, d.hotspotUp)
+	if _, up := f.snapshot(); !up {
+		t.Fatal("AP not up")
+	}
+
+	// Already online: nothing to set up.
+	d2, _, f2 := newHotspotDaemon(t, "")
+	f2.online = true
+	if rec := post(t, d2.bridgeMux(), "/wifi/hotspot", ""); rec.Code != http.StatusConflict ||
+		!strings.Contains(rec.Body.String(), "already connected") {
+		t.Errorf("online box: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestStartFailureReachesTheTV(t *testing.T) {
+	d, _, f := newHotspotDaemon(t, "")
+	f.mu.Lock()
+	f.startErr = errors.New("No suitable device found for this connection")
+	f.mu.Unlock()
+	upHotspot(t, d)
+	if d.hotspotUp() {
+		t.Fatal("hotspot up despite the failure")
+	}
+	if st := d.wifiStatus(); !strings.Contains(st["startError"].(string), "No suitable device") {
+		t.Errorf("status = %v, want the start error", st)
+	}
+}
+
+func TestWiFiControlsOnlyForTheKiosk(t *testing.T) {
+	d, _, _ := newHotspotDaemon(t, "server_url=https://s.example\n")
+	for _, origin := range []string{"https://s.example", "null", "http://evil.example"} {
+		if rec := post(t, d.bridgeMux(), "/wifi/scan", "", "Origin", origin); rec.Code != http.StatusForbidden {
+			t.Errorf("origin %q: %d, want 403", origin, rec.Code)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/wifi/scan", nil)
+	req.Host = "rebound.example:8099"
+	rec := httptest.NewRecorder()
+	d.bridgeMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("rebound host: %d, want 403", rec.Code)
+	}
+}
+
+func TestTVScanTakesTheRadioFromTheHotspot(t *testing.T) {
+	d, _, f := newHotspotDaemon(t, "")
+	upHotspot(t, d)
+	rec := post(t, d.bridgeMux(), "/wifi/scan", "", "Origin", "http://127.0.0.1:8099")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ssid":"Home"`) {
+		t.Fatalf("scan: %d %s", rec.Code, rec.Body)
+	}
+	if _, up := f.snapshot(); up || d.hotspotUp() {
+		t.Fatal("hotspot still holds the radio after a TV scan")
+	}
+	// And the watch loop leaves it down while the screen is in use.
+	d.netTick(time.Now().Add(time.Hour))
+	if d.hotspotUp() {
+		t.Fatal("hotspot came back under the TV's Wi-Fi screen")
+	}
+	if body := get(t, d.bridgeMux(), "/wifi").Body.String(); !strings.Contains(body, "/wifi/scan") {
+		t.Error("TV Wi-Fi screen doesn't scan")
+	}
+}
+
+func TestTVJoin(t *testing.T) {
+	d, rec, f := newHotspotDaemon(t, "")
+	f.onConnect = func() {
+		f.mu.Lock()
+		f.online = true
+		f.mu.Unlock()
+	}
+	post(t, d.bridgeMux(), "/wifi/scan", "")
+	form := "ssid=Home&password=short"
+	if r := post(t, d.bridgeMux(), "/wifi/join", form, "Content-Type", "application/x-www-form-urlencoded"); r.Code != http.StatusBadRequest ||
+		!strings.Contains(r.Body.String(), "8 to 63") {
+		t.Fatalf("short password: %d %s", r.Code, r.Body)
+	}
+	form = "ssid=Home&password=hunter2222"
+	if r := post(t, d.bridgeMux(), "/wifi/join", form, "Content-Type", "application/x-www-form-urlencoded"); r.Code != http.StatusAccepted {
+		t.Fatalf("join: %d %s", r.Code, r.Body)
+	}
+	waitFor(t, func() bool { return !d.wifiSetup() })
+	if calls, _ := f.snapshot(); !strings.Contains(strings.Join(calls, ";"), "connect Home hunter2222") {
+		t.Errorf("calls = %q", calls)
+	}
+	waitFor(t, func() bool { return strings.Contains(strings.Join(rec.calls(), ";"), dataPersist+" save") })
+}
+
+func TestTVJoinFailureStaysOnTheTV(t *testing.T) {
+	d, _, f := newHotspotDaemon(t, "")
+	f.connectErr = errors.New("couldn't join Home — is the password right?")
+	post(t, d.bridgeMux(), "/wifi/scan", "")
+	post(t, d.bridgeMux(), "/wifi/join", "ssid=Home&password=wrongpass", "Content-Type", "application/x-www-form-urlencoded")
+	waitFor(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.net.joining == ""
+	})
+	if _, up := f.snapshot(); up || d.hotspotUp() {
+		t.Fatal("a failed TV join brought the hotspot up under the screen")
+	}
+	if st := d.wifiStatus(); !strings.Contains(st["error"].(string), "is the password right?") {
+		t.Errorf("status = %v, want the join error", st)
 	}
 }

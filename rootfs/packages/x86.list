@@ -10,7 +10,8 @@ dbus
 fonts-dejavu-core
 busybox
 
-# Firmware for common PC hardware (non-free-firmware): GPUs, Wi-Fi, the
+# Firmware for common PC hardware (non-free-firmware): GPUs, Wi-Fi (Intel,
+# Realtek, Atheros, MediaTek, Broadcom: the cards laptops ship with), the
 # audio DSPs of recent Intel machines (SOF, with the UCM profiles
 # PipeWire needs to see their outputs), and CPU microcode.
 firmware-linux-free
@@ -20,6 +21,8 @@ firmware-amd-graphics
 firmware-iwlwifi
 firmware-realtek
 firmware-atheros
+firmware-mediatek
+firmware-brcm80211
 firmware-sof-signed
 alsa-ucm-conf
 intel-microcode

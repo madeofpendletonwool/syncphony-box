@@ -31,7 +31,10 @@ Add to `## [Unreleased]` as you go; rename it when you tag.
   `sudo syncphony-box update` runs it by hand.
 - `/v1/info` reports uptime and the last update (when, and whether it worked) for the
   room's Screens list.
-- The Wi-Fi setup hotspot for a box with no network.
+- The Wi-Fi setup hotspot for a box with no network. The setup screen
+  counts down to it, says why when it can't start, and has a **Start
+  setup Wi-Fi now** button. **Choose Wi-Fi on this screen** sets the
+  Wi-Fi from the TV with a keyboard, no phone needed.
 - HDMI-CEC: the TV wakes and switches when music starts; the remote's
   keys drive the box; optional standby when the room is idle.
 - Watchdogs and self-healing: hardware watchdog, kiosk watchdog,
@@ -41,6 +44,16 @@ Add to `## [Unreleased]` as you go; rename it when you tag.
   survives reboots and power cuts.
 - Audio output selection (`audio=`) on PipeWire.
 - `syncphony.txt` boot config file and the cage + Chromium kiosk session.
+
+### Fixed
+- x86 live session: booting from a stick without a `syncphony-data`
+  partition no longer stalls on a missing `/data` device and then fails
+  SSH and the kiosk (`mkdir: cannot create directory '/data/chromium'`).
+  `/data` is the stick's partition when there is one, and RAM otherwise.
+- x86: the setup hotspot never appeared, because the image had no
+  `wpasupplicant` (NetworkManager only recommends it), so NetworkManager
+  couldn't scan or run an access point. It also gains `wireless-regdb`
+  and MediaTek and Broadcom Wi-Fi firmware.
 
 ### Changed
 - The image is smaller: documentation, man pages and translations are

@@ -207,9 +207,15 @@ and serves the box's own screens:
   the TV says why. A new box starts the hotspot 60 s after boot. A box
   that has been online before shows the offline screen first and only
   falls back to the hotspot after 5 minutes without a network, so a
-  router reboot never puts it in setup mode. Imager's Wi-Fi settings
-  still work and are the fast path
+  router reboot never puts it in setup mode. Until the hotspot starts,
+  the setup screen counts down to it and says why if it can't start.
+  Imager's Wi-Fi settings still work and are the fast path
   ([ADR 0010](docs/adr/0010-wifi-setup-hotspot.md)).
+- **Wi-Fi from the TV itself.** With a mouse, a keyboard or the remote,
+  the setup screen's **Start setup Wi-Fi now** skips the wait. **Choose
+  Wi-Fi on this screen** (also on the hotspot screen) lists the networks
+  in range on the TV: pick one, type its password, and the box joins it
+  with no phone needed.
 
 Logs go to journald: `journalctl -u boxd -u syncphony-kiosk`.
 
