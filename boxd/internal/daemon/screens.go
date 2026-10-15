@@ -26,6 +26,8 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"ips":        boxIPs(),
 		"network":    networkState(),
 		"storage":    storageHealthy(),
+		"wifiSetup":  d.wifiSetup(),
+		"wifi":       d.wifiStatus(),
 	}
 	if th.valid() {
 		for k, v := range th.infoFields() {
@@ -52,6 +54,10 @@ func (d *Daemon) handleSetupScreen(w http.ResponseWriter, r *http.Request) {
 		d.handleStorageScreen(w, r)
 		return
 	}
+	if d.wifiSetup() {
+		http.Redirect(w, r, "/hotspot", http.StatusFound)
+		return
+	}
 	if d.configured() {
 		// The kiosk only lands here before the first navigate succeeds; if
 		// the server URL is set, the start page is the right entry.
@@ -63,11 +69,15 @@ func (d *Daemon) handleSetupScreen(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		d.log.Printf("boxd: qr: %v", err)
 	}
+	d.mu.Lock()
+	notice := d.net.notice
+	d.mu.Unlock()
 	writePage(w, setupScreenHTML(setupScreenData{
 		QR:      data,
 		URL:     setupURL,
 		IPs:     boxIPs(),
 		Network: networkState(),
+		Notice:  notice,
 	}))
 }
 
@@ -80,6 +90,10 @@ func (d *Daemon) handleSetupScreen(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleStartScreen(w http.ResponseWriter, r *http.Request) {
 	if !storageHealthy() {
 		d.handleStorageScreen(w, r)
+		return
+	}
+	if d.wifiSetup() {
+		http.Redirect(w, r, "/hotspot", http.StatusFound)
 		return
 	}
 	if !d.configured() {

@@ -30,6 +30,9 @@ func newTestDaemon(t *testing.T, txtContent string) (*Daemon, *recorder) {
 	// No dev machine has /data mounted: the storage hook pins "healthy" so
 	// the screens under test don't trip over the host's mount table.
 	t.Setenv("SB_STORAGE", "ok")
+	// boxd's /data state (the hotspot's "been online" marker) in the
+	// test's own directory.
+	t.Setenv("SB_BOXD_DIR", dir)
 	d := New("test-version", log.New(log.Writer(), "", 0), rec.run)
 	return d, rec
 }

@@ -10,13 +10,13 @@ to or moved off `/data`, this list changes in the same commit.
 |---|---|---|---|
 | Chromium profile (pairing cookie, speaker flag) | `/data/chromium` | kiosk user; path pinned by boxd's `config.DefaultProfileDir` | the box's whole identity — the room pairing |
 | applied config | `/data/syncphony-box/config.env` | `boxd config apply` / the setup form | parsed `syncphony.txt`; `/etc/syncphony-box/config.env` is a symlink to it |
-| boxd's own state | `/data/boxd` | boxd (as needed) | reserved for daemon state (e.g. learned CEC addresses) |
+| boxd's own state | `/data/boxd` | boxd (as needed) | daemon state; today `network-seen`, the marker that this box has been online once (the setup hotspot then waits 5 minutes, not 1 — ADR 0010) |
 | journald logs | `/data/journal` | journald (`/var/log/journal` → symlink) | persistent logs, capped at 50 MB (`SystemMaxUse=50M`) |
 | machine identity | `/data/system/machine-id` | `data-persist save` (the bound id) | seeded into `/etc/machine-id` by the initramfs overlay script |
 | cloud-init state | `/data/system/cloud` | cloud-init (`/var/lib/cloud` → symlink) | without it cloud-init would re-run its first boot every boot |
 | account files | `/data/system/identity/{passwd,shadow,group,gshadow,subuid,subgid}` | `data-persist save` → restored by `data-persist restore` | the Imager-created user and password; without this they would vanish with the overlay |
 | SSH host keys | `/data/system/ssh/` | `ssh-keygen -A` at restore, saved back by `save` | `/etc/ssh/ssh_host_*` are symlinks here; keeps `known_hosts` stable |
-| network connections | `/data/system/network/` | `data-persist save` → restored by `restore` | NetworkManager `system-connections` (Wi-Fi credentials) |
+| network connections | `/data/system/network/` | `data-persist save` → restored by `restore`; boxd runs a save right after the setup hotspot joins a network | NetworkManager `system-connections` (Wi-Fi credentials). The hotspot's own access point is in-memory only and never lands here |
 
 Not on `/data`, still persistent:
 

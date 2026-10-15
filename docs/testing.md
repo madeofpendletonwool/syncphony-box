@@ -211,3 +211,45 @@ Remote keys are per-TV uneven: if arrows arrive but OK doesn't (or OK
 arrives as something odd), capture `cec-ctl -d /dev/cec0 --monitor`
 output while pressing keys and add the TV to the table in
 [docs/hardware.md](hardware.md).
+
+## The Wi-Fi setup run (MAD-808)
+
+**Done-when:** a box flashed with no Wi-Fi settings and no cable can be
+set up end to end from a phone alone. Run it once with an iPhone and once
+with an Android phone, because their captive-portal behavior differs.
+
+Flash with Raspberry Pi Imager, setting a user but **no Wi-Fi**, and no
+Ethernet cable. A serial console or a keyboard helps you watch
+`journalctl -u boxd -f`, but you don't need one.
+
+1. **The hotspot appears.** Boot. The TV shows the setup screen, then
+   about a minute after boot it switches to "Connect this box to Wi-Fi"
+   with a QR code and `Syncphony-Box-XXXX`. boxd logs
+   `setup hotspot Syncphony-Box-XXXX up at 10.42.0.1`.
+2. **The portal opens.** Scan the QR with the phone camera and join (no
+   password). The phone's captive-portal sheet opens the setup page by
+   itself. If it doesn't, open `http://10.42.0.1`: the portal works
+   either way, but note which phone needed it.
+3. **A wrong password.** Pick the house network and type a wrong
+   password. The phone shows "Connecting…" and drops off. The TV shows
+   "Joining…", then the hotspot again with "Couldn't join … — is the
+   password right?". Rejoin from the phone: the form shows the same
+   error.
+4. **The real join.** Pick the network, enter the right password, and
+   the server URL. The TV shows "Joining…" and then the server's pairing
+   code. Pair from the app. `nmcli connection show` lists the network,
+   and `ls /data/system/network/` already has it, without waiting
+   15 minutes.
+5. **It sticks.** Pull the power and boot. The box comes back on the
+   Wi-Fi, paired, with no hotspot.
+6. **Router reboot.** Power the router off. The TV shows the offline
+   screen. Power it back on within 4 minutes: the box comes back to the
+   room and the hotspot never appeared.
+7. **Moved house.** Leave the router off for more than 5 minutes. The
+   hotspot comes up (the box has been online before, so it waited 5
+   minutes, not 1). Then, with nobody on the portal, power the router
+   back on. Within about 5 minutes the box releases its hotspot, finds
+   the saved network, and returns to the room.
+8. **Ethernet wins.** With the hotspot up, plug in a cable. The hotspot
+   goes down within seconds and the TV goes back to the room (or the
+   setup screen, if no server is set).
