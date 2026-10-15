@@ -68,3 +68,14 @@ func TestInfoReportsTheLastUpdate(t *testing.T) {
 		t.Fatalf("update %v", u)
 	}
 }
+
+func TestParseUptime(t *testing.T) {
+	if v, ok := parseUptime("354121.47 1371921.18\n"); !ok || v != 354121 {
+		t.Fatalf("got %d %v", v, ok)
+	}
+	for _, bad := range []string{"", "nope 1", "-3 1"} {
+		if _, ok := parseUptime(bad); ok {
+			t.Fatalf("%q parsed", bad)
+		}
+	}
+}

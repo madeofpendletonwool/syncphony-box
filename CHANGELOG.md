@@ -21,7 +21,7 @@ Add to `## [Unreleased]` as you go; rename it when you tag.
   music plays, and reboots only if something changed and the room is
   idle. `auto_update=off` in `syncphony.txt` turns it off;
   `sudo syncphony-box update` runs it by hand.
-- `/v1/info` reports the last update (when, and whether it worked) for the
+- `/v1/info` reports uptime and the last update (when, and whether it worked) for the
   room's Screens list.
 - The Wi-Fi setup hotspot for a box with no network.
 - HDMI-CEC: the TV wakes and switches when music starts; the remote's
