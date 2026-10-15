@@ -81,6 +81,7 @@ ln -v -sfn /data/system/cloud "${ROOTFS_DIR}/var/lib/cloud"
 
 # config.env: boxd writes the real file on /data; the /etc path stays a
 # symlink so the kiosk wrapper and the reset tool keep reading it there.
+install -v -d -m 0755 "${ROOTFS_DIR}/etc/syncphony-box"
 ln -v -sfn /data/syncphony-box/config.env "${ROOTFS_DIR}/etc/syncphony-box/config.env"
 
 # SSH host keys: dangling until data-persist restore / ssh-keygen -A
