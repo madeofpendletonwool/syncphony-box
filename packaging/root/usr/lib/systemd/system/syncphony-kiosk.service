@@ -6,6 +6,10 @@ Conflicts=getty@tty1.service
 # give the box a sane clock before the page starts (MAD-806).
 After=systemd-user-sessions.service getty@tty1.service network-online.target syncphony-audio.service boxd.service time-sync.target
 Wants=network-online.target syncphony-audio.service boxd.service time-sync.target
+# Never give up restarting: systemd's default start limit (5 starts in
+# 10 s) stops a kiosk that fails fast for good, leaving the TV on a dead
+# console until someone power-cycles the box.
+StartLimitIntervalSec=0
 
 [Service]
 User=kiosk
