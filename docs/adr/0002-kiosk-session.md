@@ -31,6 +31,9 @@ time):
   `TTYVDisown=yes`, `UtmpIdentifier=tty1`
 - `After=`/`Wants=network-online.target` so Chromium doesn't start into an
   unconfigured interface
+- `cage -s`: cage blocks Ctrl+Alt+F*n* by default, which left a box
+  with a dead kiosk and a keyboard plugged in no way to reach a console.
+  Every console still asks for a password.
 - `Restart=always`, `RestartSec=2`: a killed Chromium (cage exits when its
   only client goes) brings the session back within seconds
 

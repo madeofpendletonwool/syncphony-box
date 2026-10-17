@@ -15,7 +15,7 @@ TTYReset=yes
 TTYVHangup=yes
 UtmpIdentifier=tty1
 StandardInput=tty
-ExecStart=/usr/bin/cage -- /usr/lib/syncphony-box/kiosk
+ExecStart=/usr/bin/cage -s -- /usr/lib/syncphony-box/kiosk
 Restart=always
 RestartSec=2
 

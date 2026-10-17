@@ -87,6 +87,11 @@ switched on at 09:00 doesn't start updating mid-party). It runs
 `boxd update`:
 
 1. `auto_update=off` in `syncphony.txt` → skip.
+   Started outside the 04:00 hour → skip (manual runs exempt). That is a
+   clock jump, not the schedule: a box without an RTC boots with an old
+   clock, systemd plans the next 04:00 from it, and when NTP corrects the
+   clock that 04:00 is already past, so the timer fires at once, in the
+   middle of setup.
 2. The room is playing → skip tonight. "Playing" is boxd's view: the
    page's last bridge event is `playing` **and** its heartbeat is fresh
    (a dead page's last word doesn't count). boxd exposes it on `/status`.
