@@ -54,6 +54,12 @@ Add to `## [Unreleased]` as you go; rename it when you tag.
   `wpasupplicant` (NetworkManager only recommends it), so NetworkManager
   couldn't scan or run an access point. It also gains `wireless-regdb`
   and MediaTek and Broadcom Wi-Fi firmware.
+- After setup gave the box a name, the TV could show Chromium's "The
+  profile appears to be in use by another Chromium process on another
+  computer" instead of the room. The rename changed the hostname, and
+  Chromium wouldn't take over the lock its killed predecessor left
+  behind. The kiosk now clears that stale lock before every start (the
+  same after a power cut).
 
 ### Changed
 - The image is smaller: documentation, man pages and translations are

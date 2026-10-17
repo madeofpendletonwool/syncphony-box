@@ -5,8 +5,9 @@
 // state survive reboots, power cuts and crashes, and both live here or are
 // triggered from boxd's bridge:
 //
-//   - Prep clears Chromium's "exited uncleanly" bookkeeping before every
-//     start, so a power cut never leaves a restore prompt on the screen.
+//   - Prep clears Chromium's "exited uncleanly" bookkeeping and its stale
+//     profile lock before every start, so a power cut or a rename never
+//     leaves a restore prompt or a "profile in use" error on the screen.
 //   - Reset wipes the whole profile, so the box shows a fresh pairing code
 //     (when it moves to another room or server).
 //
@@ -35,9 +36,20 @@ func Path() string {
 	return config.DefaultProfileDir
 }
 
-// Prep clears the unclean-exit state Chromium records in its profile, so a
-// power cut never turns into a "restore pages?" prompt on the TV. It edits
-// in place, preserving every other key:
+// singletonFiles are Chromium's profile lock: SingletonLock is a symlink
+// to "<hostname>-<pid>", the others belong to it. Chromium removes them
+// on a clean exit; a kill (cage stopping under it, a power cut) leaves
+// them behind. Chromium takes over a lock whose pid is dead only when the
+// hostname matches, so after a rename (setup's name=, hostnamectl) it
+// refuses the profile with "in use by another Chromium process on another
+// computer" — on a TV with nobody there to click through it.
+var singletonFiles = []string{"SingletonLock", "SingletonSocket", "SingletonCookie"}
+
+// Prep readies the profile for a start. It removes the stale profile lock
+// (singletonFiles) — safe because the kiosk wrapper calls Prep just before
+// it execs the box's only Chromium. Then it clears the unclean-exit state
+// Chromium records, so a power cut never turns into a "restore pages?"
+// prompt on the TV. It edits in place, preserving every other key:
 //
 //   - <dir>/Default/Preferences: browser.exit_type = "Normal"
 //   - <dir>/Local State:         browser.exited_cleanly = true
@@ -45,10 +57,17 @@ func Path() string {
 // A fresh profile (files missing) is fine and left alone: nothing to clear.
 // A file that is not valid JSON is reported as an error and left untouched
 // — the caller logs it and starts Chromium anyway, exactly as it would
-// have without this call.
+// have without this call. The lock goes first, so a bad JSON file never
+// keeps it.
 func Prep(dir string) error {
 	if dir == "" {
 		return errors.New("profile: empty directory")
+	}
+	for _, name := range singletonFiles {
+		// os.Remove takes the symlink itself, dangling or not.
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	prefs := filepath.Join(dir, "Default", "Preferences")
 	if _, err := os.Stat(prefs); err == nil {

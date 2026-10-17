@@ -69,6 +69,16 @@ key:
 - `Default/Preferences`: `browser.exit_type = "Normal"`
 - `Local State`: `browser.exited_cleanly = true`
 
+Before that it removes Chromium's profile lock (`SingletonLock`,
+`SingletonSocket`, `SingletonCookie`). A killed Chromium — cage stopped
+under it on a kiosk restart, or a power cut — leaves the lock behind, and
+`SingletonLock` names the hostname that held it. Chromium only takes over
+a dead lock from its own hostname; after the box is renamed (setup's
+`name=` runs `hostnamectl` just before restarting the kiosk) it refuses
+the profile with "in use by another Chromium process on another
+computer". The wrapper runs prep right before it execs the box's only
+Chromium, so no live process can hold the lock then.
+
 A missing file (fresh profile) is a no-op; invalid JSON is reported and
 left alone, and prep never blocks the start (the wrapper runs it best
 effort). Together with the existing `--disable-session-crashed-bubble`

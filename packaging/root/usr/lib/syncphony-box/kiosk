@@ -55,9 +55,10 @@ fi
 
 mkdir -p "${DATA_DIR}"
 
-# A power cut leaves Chromium's own "exited uncleanly" bookkeeping behind,
-# which can surface as a restore prompt. Clear it before every start —
-# best effort: a failure never blocks the kiosk.
+# A power cut or a kill leaves Chromium's own "exited uncleanly"
+# bookkeeping behind (a restore prompt), and its profile lock (a "profile
+# in use on another computer" error once the hostname changes). Clear both
+# before every start — best effort: a failure never blocks the kiosk.
 "${BOXD_BIN}" profile prep "${DATA_DIR}" 2>/dev/null || true
 
 # GPU flags: the Pi's vc4/v3d GPU is on Chromium's software-rendering
