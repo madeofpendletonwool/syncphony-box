@@ -9,14 +9,15 @@ import (
 	"strings"
 )
 
-// Paths resolves the SB_* test hooks: SB_TXT, SB_ENV, SB_CMDLINE override
-// the real file locations, SB_PROFILE the Chromium profile dir, and
+// Paths resolves the SB_* test hooks: SB_TXT, SB_ENV, SB_CMDLINE, SB_HOSTS
+// override the real file locations, SB_PROFILE the Chromium profile dir, and
 // SB_HOSTNAME_CMD / SB_REBOOT_CMD replace the privileged actions, so
 // `boxd config apply` can run on a dev machine.
 type Paths struct {
 	Txt         string
 	Env         string
 	Cmdline     string
+	Hosts       string // empty = leave /etc/hosts alone (tests)
 	ProfileDir  string // empty = DefaultProfileDir
 	HostnameCmd string // run as: sh -c "$HostnameCmd" boxd <hostname>
 	RebootCmd   string // run as: sh -c "$RebootCmd"
@@ -27,6 +28,7 @@ func PathsFromEnv() Paths {
 		Txt:         envOr("SB_TXT", DefaultTxtPath),
 		Env:         envOr("SB_ENV", DefaultEnvPath),
 		Cmdline:     envOr("SB_CMDLINE", defaultCmdlinePath()),
+		Hosts:       envOr("SB_HOSTS", DefaultHostsPath),
 		ProfileDir:  os.Getenv("SB_PROFILE"),
 		HostnameCmd: os.Getenv("SB_HOSTNAME_CMD"),
 		RebootCmd:   os.Getenv("SB_REBOOT_CMD"),
@@ -193,6 +195,14 @@ func readEnvFile(path string) Config {
 	return cfg
 }
 
+// SetHostname applies a new hostname: the running name, /etc/hostname
+// and the 127.0.1.1 line in /etc/hosts. Without that line the box can't
+// resolve its own name (sudo complains on every call). Both the boot path
+// and boxd's setup save use it.
+func SetHostname(hostname string, p Paths, run RunCommand, log *log.Logger) {
+	setHostname(hostname, p, run, log)
+}
+
 func setHostname(hostname string, p Paths, run RunCommand, log *log.Logger) {
 	if p.HostnameCmd != "" {
 		if err := runSh(p.HostnameCmd, "boxd", hostname, run); err != nil {
@@ -205,6 +215,11 @@ func setHostname(hostname string, p Paths, run RunCommand, log *log.Logger) {
 		log.Printf("boxd config: cannot write /etc/hostname: %v", err)
 	} else if err := run("hostname", hostname); err != nil {
 		log.Printf("boxd config: cannot set the running hostname: %v", err)
+	}
+	if p.Hosts != "" {
+		if err := SyncHosts(p.Hosts, hostname); err != nil {
+			log.Printf("boxd config: cannot update %s: %v", p.Hosts, err)
+		}
 	}
 	// If avahi managed to start first, re-announce under the new name.
 	run("systemctl", "try-restart", "avahi-daemon.service")
@@ -403,4 +418,41 @@ func urlEscape(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// SyncHosts points the Debian 127.0.1.1 line of a hosts file at
+// hostname: it replaces the existing line (the image's old name) or
+// appends one. Everything else in the file is kept as it was.
+func SyncHosts(path, hostname string) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	want := "127.0.1.1\t" + hostname
+	var out []string
+	found := false
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if f := strings.Fields(line); len(f) > 0 && f[0] == "127.0.1.1" {
+			if !found {
+				out = append(out, want)
+				found = true
+			}
+			continue
+		}
+		if line != "" || len(out) > 0 {
+			out = append(out, line)
+		}
+	}
+	if !found {
+		out = append(out, want)
+	}
+	content := strings.Join(out, "\n") + "\n"
+	if content == string(data) {
+		return nil
+	}
+	tmp := path + ".tmp"
+	if err := writeFileSync(tmp, content, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

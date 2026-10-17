@@ -18,6 +18,7 @@ import (
 const (
 	DefaultTxtPath     = "/boot/firmware/syncphony.txt"
 	DefaultCmdlinePath = "/boot/firmware/cmdline.txt"
+	DefaultHostsPath   = "/etc/hosts"
 
 	// DefaultGrubCmdlinePath is the kernel command line on an x86 box
 	// (MAD-846, ADR 0013). /boot/firmware is the EFI system partition

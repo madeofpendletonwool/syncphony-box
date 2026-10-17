@@ -30,7 +30,7 @@ txt() {
 }
 
 apply() {
-	SB_TXT="${TXT}" SB_ENV="${ENV_OUT}" SB_CMDLINE="${CMDLINE}" \
+	SB_TXT="${TXT}" SB_ENV="${ENV_OUT}" SB_CMDLINE="${CMDLINE}" SB_HOSTS="${WORK}/hosts" \
 	SB_HOSTNAME_CMD="printf %s \"\$1\" > '${HOST_OUT}'" \
 	SB_REBOOT_CMD="touch '${REBOOT_FLAG}'" \
 		run "${SCRIPT}" apply
@@ -256,7 +256,7 @@ cmdline_is() {
 
 @test "apply survives an unwritable cmdline: no reboot, still exit 0" {
 	mkdir -p "${WORK}/dircmdline"
-	SB_TXT="${TXT}" SB_ENV="${ENV_OUT}" SB_CMDLINE="${WORK}/dircmdline" \
+	SB_TXT="${TXT}" SB_ENV="${ENV_OUT}" SB_CMDLINE="${WORK}/dircmdline" SB_HOSTS="${WORK}/hosts" \
 	SB_HOSTNAME_CMD=true SB_REBOOT_CMD="touch '${REBOOT_FLAG}'" \
 		run "${SCRIPT}" apply
 	[ "$status" -eq 0 ]
