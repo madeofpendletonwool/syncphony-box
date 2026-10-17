@@ -91,6 +91,24 @@ fake_identity() {
 	grep -q 'PRIVATE-KEY-DATA' "${ETC}/ssh/ssh_host_ed25519_key"
 }
 
+@test "symlinked SSH keys (the box's layout) don't stop the Wi-Fi round trip" {
+	# On the box /etc/ssh/ssh_host_* point into /data; cp onto the same
+	# file failed and ended both verbs before the NetworkManager step.
+	mkdir -p "${DATA}/system/ssh" "${ETC}/NetworkManager/system-connections"
+	printf 'PRIVATE-KEY-DATA' > "${DATA}/system/ssh/ssh_host_ed25519_key"
+	ln -s "${DATA}/system/ssh/ssh_host_ed25519_key" "${ETC}/ssh/ssh_host_ed25519_key"
+	printf '[wifi]\nssid=Home\n' > "${ETC}/NetworkManager/system-connections/Home.nmconnection"
+	run "${SCRIPT}" save
+	[ "$status" -eq 0 ]
+	cmp "${ETC}/NetworkManager/system-connections/Home.nmconnection" "${DATA}/system/network/Home.nmconnection"
+
+	rm "${ETC}/NetworkManager/system-connections/Home.nmconnection"
+	run "${SCRIPT}" restore
+	[ "$status" -eq 0 ]
+	grep -q 'ssid=Home' "${ETC}/NetworkManager/system-connections/Home.nmconnection"
+	[ -L "${ETC}/ssh/ssh_host_ed25519_key" ]
+}
+
 @test "save persists the machine-id for the initramfs seed" {
 	printf '0123456789abcdef0123456789abcdef\n' > "${ETC}/machine-id"
 	run "${SCRIPT}" save

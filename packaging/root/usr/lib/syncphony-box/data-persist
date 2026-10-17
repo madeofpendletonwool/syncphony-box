@@ -61,6 +61,17 @@ ensure_layout() {
 	chown kiosk:kiosk "${DATA}/chromium" 2>/dev/null || true
 }
 
+# copy_key copies one SSH host key unless both paths are already the
+# same file. On the box they are: /etc/ssh/ssh_host_* are symlinks into
+# /data (stage 20), and cp refuses to copy a file onto itself — which,
+# under set -e, ended restore and save right here, before the
+# NetworkManager connections, so a joined Wi-Fi never survived a reboot.
+copy_key() {
+	[ -f "$1" ] || return 0
+	[ "$1" -ef "$2" ] && return 0
+	cp -p "$1" "$2"
+}
+
 # restore_identity merges one saved account file over the image's: every
 # saved entry wins (the Imager user, its password, its groups), and an
 # account the image has but the save doesn't is kept. That second half is
@@ -104,9 +115,7 @@ restore() {
 	for t in ${SSH_KEY_TYPES}; do
 		for suffix in "" ".pub"; do
 			key="ssh_host_${t}_key${suffix}"
-			if [ -f "${SSHDIR}/${key}" ]; then
-				cp -p "${SSHDIR}/${key}" "${ETC}/ssh/${key}"
-			fi
+			copy_key "${SSHDIR}/${key}" "${ETC}/ssh/${key}"
 		done
 	done
 	# ssh-keygen -A always operates on the real /etc/ssh, so it only runs
@@ -136,9 +145,7 @@ save() {
 	for t in ${SSH_KEY_TYPES}; do
 		for suffix in "" ".pub"; do
 			key="ssh_host_${t}_key${suffix}"
-			if [ -f "${ETC}/ssh/${key}" ]; then
-				cp -p "${ETC}/ssh/${key}" "${SSHDIR}/${key}"
-			fi
+			copy_key "${ETC}/ssh/${key}" "${SSHDIR}/${key}"
 		done
 	done
 
