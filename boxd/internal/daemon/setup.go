@@ -106,10 +106,7 @@ func (d *Daemon) saveServer(serverURL, name, from string) error {
 		d.log.Printf("boxd: setup: cannot write %s: %v", d.paths.Env, err)
 	}
 	if name != "" && cfg.Hostname != "" && cfg.Hostname != hostname() {
-		if err := d.run("hostnamectl", "set-hostname", cfg.Hostname); err != nil {
-			d.log.Printf("boxd: setup: hostname: %v", err)
-		}
-		d.run("systemctl", "try-restart", "avahi-daemon.service")
+		config.SetHostname(cfg.Hostname, d.paths, d.run, d.log)
 	}
 	d.closeSetupWindow()
 	d.restartKiosk("setup saved; entering the server through the start page", false)

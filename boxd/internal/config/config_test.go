@@ -293,6 +293,37 @@ func TestApplySetsHostnameFromName(t *testing.T) {
 	}
 }
 
+func TestApplyPointsHostsAtTheNewName(t *testing.T) {
+	dir := t.TempDir()
+	txt := filepath.Join(dir, "syncphony.txt")
+	hosts := filepath.Join(dir, "hosts")
+	os.WriteFile(txt, []byte("name=House 1\n"), 0o644)
+	os.WriteFile(hosts, []byte("127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost\n\n127.0.1.1\t\tsyncphony-box\n"), 0o644)
+
+	p := Paths{Txt: txt, Env: filepath.Join(dir, "config.env"), Cmdline: filepath.Join(dir, "cmdline.txt"),
+		Hosts: hosts, HostnameCmd: "true"}
+	Apply(p, func(string, ...string) error { return nil }, testLogger())
+	got, _ := os.ReadFile(hosts)
+	want := "127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost\n\n127.0.1.1\thouse-1\n"
+	if string(got) != want {
+		t.Fatalf("hosts = %q, want %q", got, want)
+	}
+}
+
+func TestSyncHostsAppendsWhenMissingAndIsIdempotent(t *testing.T) {
+	hosts := filepath.Join(t.TempDir(), "hosts")
+	os.WriteFile(hosts, []byte("127.0.0.1\tlocalhost"), 0o644)
+	for i := 0; i < 2; i++ {
+		if err := SyncHosts(hosts, "den-tv"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := os.ReadFile(hosts)
+	if string(got) != "127.0.0.1\tlocalhost\n127.0.1.1\tden-tv\n" {
+		t.Fatalf("hosts = %q", got)
+	}
+}
+
 func TestSetKeysPreservesCommentsAndEndings(t *testing.T) {
 	dir := t.TempDir()
 	txt := filepath.Join(dir, "syncphony.txt")

@@ -146,6 +146,27 @@ func TestPlayingSkipsTheNightlyRun(t *testing.T) {
 	}
 }
 
+func TestTimerRunOutsideTheWindowSkipsUnlessManual(t *testing.T) {
+	// The clock-jump case: NTP moved the clock past the planned 04:00 and
+	// the timer fired at once, in the afternoon.
+	box := newBox(t)
+	env := box.env(filepath.Join(t.TempDir(), "u.json"))
+	env.Now = func() time.Time { return time.Date(2026, 10, 17, 17, 6, 0, 0, time.UTC) }
+	if _, err := Run(env, Options{AutoUpdate: "on"}); err != Skipped {
+		t.Fatalf("err %v", err)
+	}
+	if len(box.calls) != 0 {
+		t.Fatalf("ran %q outside the window", box.calls)
+	}
+
+	box = newBox(t, snapN, snapN)
+	env = box.env(filepath.Join(t.TempDir(), "u.json"))
+	env.Now = func() time.Time { return time.Date(2026, 10, 17, 17, 6, 0, 0, time.UTC) }
+	if st, err := Run(env, Options{AutoUpdate: "on", Manual: true}); err != nil || st.Result != ResultCurrent {
+		t.Fatalf("manual run: st %+v err %v", st, err)
+	}
+}
+
 func TestAutoUpdateOffSkipsUnlessManual(t *testing.T) {
 	box := newBox(t)
 	if _, err := Run(box.env(filepath.Join(t.TempDir(), "u.json")), Options{AutoUpdate: "off"}); err != Skipped {

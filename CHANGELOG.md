@@ -60,6 +60,20 @@ Add to `## [Unreleased]` as you go; rename it when you tag.
   Chromium wouldn't take over the lock its killed predecessor left
   behind. The kiosk now clears that stale lock before every start (the
   same after a power cut).
+- A Wi-Fi network joined from the setup hotspot was forgotten at every
+  reboot, so the box came back "offline" and asked for Wi-Fi again.
+  `data-persist` copied the SSH host keys onto themselves (they are
+  symlinks into `/data`), failed, and stopped before saving or restoring
+  the NetworkManager connections.
+- The box's hostname is now in `/etc/hosts` after a rename (`sudo` said
+  "unable to resolve host" on every call).
+- Ctrl+Alt+F1–F12 now reach a console login when a keyboard is plugged
+  in; cage blocked VT switching.
+- A kiosk that fails several times quickly keeps being restarted instead
+  of leaving the TV on a dead console.
+- A box with no clock battery could start the nightly update the moment
+  it first got online (the clock correcting itself made the timer fire).
+  Timer runs outside the 04:00 hour are skipped.
 
 ### Changed
 - The image is smaller: documentation, man pages and translations are

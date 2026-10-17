@@ -27,6 +27,8 @@ func newTestDaemon(t *testing.T, txtContent string) (*Daemon, *recorder) {
 	rec := &recorder{}
 	t.Setenv("SB_TXT", txt)
 	t.Setenv("SB_ENV", env)
+	// A setup save with name= syncs the hosts file: never the host's own.
+	t.Setenv("SB_HOSTS", filepath.Join(dir, "hosts"))
 	// No dev machine has /data mounted: the storage hook pins "healthy" so
 	// the screens under test don't trip over the host's mount table.
 	t.Setenv("SB_STORAGE", "ok")

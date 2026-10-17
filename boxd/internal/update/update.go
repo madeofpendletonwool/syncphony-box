@@ -67,6 +67,14 @@ const (
 	SourceList = "/usr/share/syncphony-box/apt/syncphony-box.list"
 
 	lockPath = "/run/syncphony-update.lock"
+
+	// scheduledHour is syncphony-update.timer's hour (04:00 plus up to
+	// 10 minutes of spread). A timer run outside it is a clock jump, not
+	// the schedule: a box with no RTC (every Pi, and a PC with a flat
+	// battery) boots with an old clock, systemd plans the next 04:00 from
+	// it, and when NTP corrects the clock that 04:00 is in the past and
+	// the timer fires at once, mid-setup, in the middle of the day.
+	scheduledHour = 4
 )
 
 // Results recorded in the state file.
@@ -209,6 +217,10 @@ func Run(env Env, opt Options) (State, error) {
 	lg := env.Log
 	if !opt.Manual && opt.AutoUpdate == "off" {
 		lg.Printf("update: auto_update=off in syncphony.txt; skipping (sudo syncphony-box update still works)")
+		return State{}, Skipped
+	}
+	if now := env.Now(); !opt.Manual && now.Hour() != scheduledHour {
+		lg.Printf("update: started at %s, outside the %02d:00 window (the clock jumped); skipping until tonight", now.Format("15:04"), scheduledHour)
 		return State{}, Skipped
 	}
 	if playing, err := env.Playing(); err != nil {
