@@ -125,6 +125,56 @@ func TestPrepLeavesInvalidJSONAlone(t *testing.T) {
 	}
 }
 
+// writeStaleLock leaves what a killed Chromium does: SingletonLock is a
+// dangling symlink to "<hostname>-<pid>", here a hostname the box no
+// longer has (setup renamed it).
+func writeStaleLock(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Symlink("syncphony-box-a1b2-1234", filepath.Join(dir, "SingletonLock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/tmp/.org.chromium.Chromium.gone/SingletonSocket", filepath.Join(dir, "SingletonSocket")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("1234567890", filepath.Join(dir, "SingletonCookie")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepRemovesStaleProfileLock(t *testing.T) {
+	dir := t.TempDir()
+	writeProfile(t, dir)
+	writeStaleLock(t, dir)
+	if err := Prep(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range singletonFiles {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s survived Prep (err=%v)", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Default", "Preferences")); err != nil {
+		t.Fatalf("profile lost with the lock: %v", err)
+	}
+}
+
+func TestPrepRemovesLockEvenWithInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "Default"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Default", "Preferences"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStaleLock(t, dir)
+	if err := Prep(dir); err == nil {
+		t.Fatal("expected an error for invalid JSON")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "SingletonLock")); !os.IsNotExist(err) {
+		t.Fatalf("invalid JSON kept the lock (err=%v)", err)
+	}
+}
+
 func TestPrepRejectsEmptyDir(t *testing.T) {
 	if err := Prep(""); err == nil {
 		t.Fatal("expected an error for an empty dir")
