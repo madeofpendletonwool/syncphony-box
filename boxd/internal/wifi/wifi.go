@@ -44,6 +44,15 @@ const (
 	// connectWait bounds a join attempt: association, the 4-way
 	// handshake and DHCP on a slow router fit comfortably.
 	connectWait = 45
+
+	// visibleTries rescans, visiblePause apart, wait for the network
+	// before a join.
+	visibleTries = 4
+)
+
+var (
+	visiblePause = 3 * time.Second
+	sleep        = time.Sleep // stubbed in tests
 )
 
 // Network is one scanned Wi-Fi network, deduplicated by SSID.
@@ -233,7 +242,9 @@ func (n *NM) StopAP() error {
 func (n *NM) Connect(dev, ssid, password string, hidden bool) error {
 	n.nmcli("radio", "wifi", "on")
 	n.nmcli("connection", "delete", "id", ssid)
-	n.nmcli("device", "wifi", "rescan", "ifname", dev)
+	if !hidden {
+		n.waitVisible(dev, ssid)
+	}
 	args := []string{"--wait", strconv.Itoa(connectWait), "device", "wifi", "connect", ssid}
 	if password != "" {
 		args = append(args, "password", password)
@@ -247,6 +258,29 @@ func (n *NM) Connect(dev, ssid, password string, hidden bool) error {
 		return friendlyError(ssid, err)
 	}
 	return nil
+}
+
+// waitVisible rescans until ssid is in the scan list, a few times at
+// most. Right after the access point goes down the list is empty, and a
+// plain "wifi rescan" returns before the scan ends, so the connect that
+// followed failed with "No network with SSID" for a network in range
+// ("--rescan yes" waits for the scan). A network that never shows still
+// gets the connect, whose error says why.
+func (n *NM) waitVisible(dev, ssid string) {
+	for i := 0; i < visibleTries; i++ {
+		if i > 0 {
+			sleep(visiblePause)
+		}
+		out, err := n.nmcli("-t", "-f", "SSID", "device", "wifi", "list", "ifname", dev, "--rescan", "yes")
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if f := splitTerse(line); len(f) > 0 && f[0] == ssid {
+				return
+			}
+		}
+	}
 }
 
 // friendlyError turns nmcli's activation errors into something a person
