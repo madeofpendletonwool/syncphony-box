@@ -105,6 +105,11 @@ func (d *Daemon) saveServer(serverURL, name, from string) error {
 	if err := config.WriteEnvFile(d.paths.Env, cfg); err != nil {
 		d.log.Printf("boxd: setup: cannot write %s: %v", d.paths.Env, err)
 	}
+	if d.paths.Policy != "" {
+		if err := config.WritePolicy(d.paths.Policy, cfg.ServerURL); err != nil {
+			d.log.Printf("boxd: setup: cannot write %s: %v", d.paths.Policy, err)
+		}
+	}
 	if name != "" && cfg.Hostname != "" && cfg.Hostname != hostname() {
 		config.SetHostname(cfg.Hostname, d.paths, d.run, d.log)
 	}

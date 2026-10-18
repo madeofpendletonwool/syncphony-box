@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -307,6 +308,34 @@ func TestApplyPointsHostsAtTheNewName(t *testing.T) {
 	want := "127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost\n\n127.0.1.1\thouse-1\n"
 	if string(got) != want {
 		t.Fatalf("hosts = %q, want %q", got, want)
+	}
+}
+
+func TestApplyLetsTheServerReachLoopback(t *testing.T) {
+	dir := t.TempDir()
+	txt := filepath.Join(dir, "syncphony.txt")
+	policy := filepath.Join(dir, "policies", "managed", "syncphony-box.json")
+	os.WriteFile(txt, []byte("server_url=https://Jams.Example.com/tv\n"), 0o644)
+	p := Paths{Txt: txt, Env: filepath.Join(dir, "config.env"), Cmdline: filepath.Join(dir, "cmdline.txt"),
+		Policy: policy, HostnameCmd: "true"}
+	Apply(p, func(string, ...string) error { return nil }, testLogger())
+
+	var got map[string][]string
+	data, err := os.ReadFile(policy)
+	if err != nil || json.Unmarshal(data, &got) != nil {
+		t.Fatalf("policy %q: %v", data, err)
+	}
+	for _, key := range []string{"LocalNetworkAccessAllowedForUrls", "LocalNetworkAllowedForUrls", "LoopbackNetworkAllowedForUrls"} {
+		if len(got[key]) != 1 || got[key][0] != "https://jams.example.com" {
+			t.Fatalf("%s = %v", key, got[key])
+		}
+	}
+
+	// The server removed: so is the policy.
+	os.WriteFile(txt, []byte("name=Den\n"), 0o644)
+	Apply(p, func(string, ...string) error { return nil }, testLogger())
+	if _, err := os.Stat(policy); !os.IsNotExist(err) {
+		t.Fatal("policy kept without a server")
 	}
 }
 

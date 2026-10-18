@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -9,8 +10,8 @@ import (
 	"strings"
 )
 
-// Paths resolves the SB_* test hooks: SB_TXT, SB_ENV, SB_CMDLINE, SB_HOSTS
-// override the real file locations, SB_PROFILE the Chromium profile dir, and
+// Paths resolves the SB_* test hooks: SB_TXT, SB_ENV, SB_CMDLINE, SB_HOSTS,
+// SB_CHROMIUM_POLICY override the real file locations, SB_PROFILE the Chromium profile dir, and
 // SB_HOSTNAME_CMD / SB_REBOOT_CMD replace the privileged actions, so
 // `boxd config apply` can run on a dev machine.
 type Paths struct {
@@ -18,6 +19,7 @@ type Paths struct {
 	Env         string
 	Cmdline     string
 	Hosts       string // empty = leave /etc/hosts alone (tests)
+	Policy      string // Chromium managed policy file; empty = none (tests)
 	ProfileDir  string // empty = DefaultProfileDir
 	HostnameCmd string // run as: sh -c "$HostnameCmd" boxd <hostname>
 	RebootCmd   string // run as: sh -c "$RebootCmd"
@@ -29,6 +31,7 @@ func PathsFromEnv() Paths {
 		Env:         envOr("SB_ENV", DefaultEnvPath),
 		Cmdline:     envOr("SB_CMDLINE", defaultCmdlinePath()),
 		Hosts:       envOr("SB_HOSTS", DefaultHostsPath),
+		Policy:      envOr("SB_CHROMIUM_POLICY", DefaultPolicyPath),
 		ProfileDir:  os.Getenv("SB_PROFILE"),
 		HostnameCmd: os.Getenv("SB_HOSTNAME_CMD"),
 		RebootCmd:   os.Getenv("SB_REBOOT_CMD"),
@@ -131,6 +134,11 @@ func Apply(p Paths, run RunCommand, log *log.Logger) {
 
 	if envCfg.Hostname != "" {
 		setHostname(envCfg.Hostname, p, run, log)
+	}
+	if p.Policy != "" {
+		if err := WritePolicy(p.Policy, cfg.ServerURL); err != nil {
+			log.Printf("boxd config: cannot write %s: %v", p.Policy, err)
+		}
 	}
 
 	syncCmdline(envCfg.Resolution, envCfg.Rotate, p, run, log)
@@ -449,6 +457,60 @@ func SyncHosts(path, hostname string) error {
 	content := strings.Join(out, "\n") + "\n"
 	if content == string(data) {
 		return nil
+	}
+	tmp := path + ".tmp"
+	if err := writeFileSync(tmp, content, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ServerOrigin is the scheme://host[:port] of a server URL, lowercased
+// (https when no scheme is given); "" for no server.
+func ServerOrigin(server string) string {
+	if server == "" {
+		return ""
+	}
+	u := server
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if i := strings.IndexAny(u, "/?#"); i >= 0 {
+		u = u[:i]
+	}
+	if u == "" {
+		return ""
+	}
+	scheme := "https"
+	if strings.HasPrefix(server, "http://") {
+		scheme = "http"
+	}
+	return scheme + "://" + strings.ToLower(u)
+}
+
+// WritePolicy writes the kiosk's Chromium managed policy: the server's
+// page may reach boxd on loopback. Since Chrome 142 a public site needs
+// the Local Network Access permission for that, and in a kiosk nobody can
+// answer the prompt, so the page's heartbeats never arrived and the
+// watchdog restarted the kiosk every few minutes. Chromium 146 split the
+// permission into Local Network and Loopback Network, each with its own
+// allow-list; the policy names all of them (Chromium ignores the ones it
+// doesn't know). No server, no policy.
+func WritePolicy(path, serverURL string) error {
+	origin := ServerOrigin(serverURL)
+	if origin == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	list, _ := json.Marshal([]string{origin})
+	content := fmt.Sprintf("{\n  \"LocalNetworkAccessAllowedForUrls\": %s,\n  \"LocalNetworkAllowedForUrls\": %s,\n  \"LoopbackNetworkAllowedForUrls\": %s\n}\n", list, list, list)
+	if old, err := os.ReadFile(path); err == nil && string(old) == content {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
 	tmp := path + ".tmp"
 	if err := writeFileSync(tmp, content, 0o644); err != nil {
