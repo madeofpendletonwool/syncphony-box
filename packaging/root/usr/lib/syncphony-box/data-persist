@@ -9,8 +9,8 @@
 # docs/persistent-paths.md). This script owns the few that cannot be a
 # symlink because something reads them too early or another tool rewrites
 # them atomically: the account files, the SSH host keys, the
-# NetworkManager connections, and the machine-id (seeded from /data by
-# the initramfs overlay script, saved back here).
+# NetworkManager connections, timesyncd's clock file, and the machine-id
+# (seeded from /data by the initramfs overlay script, saved back here).
 #
 #   restore  runs early on every boot (syncphony-data-prepare.service,
 #            before cloud-init/sshd/NetworkManager): put the saved state
@@ -21,15 +21,25 @@
 #            (worst case: the last 15 minutes of account edits are lost).
 #
 # Dev/test hooks (same spirit as boxd's SB_* hooks): SB_DATA_DIR moves
-# /data, SB_ETC_DIR moves /etc, SB_SKIP_SSH=1 skips ssh-keygen.
+# /data, SB_ETC_DIR moves /etc, SB_VAR_DIR moves /var, SB_SKIP_SSH=1 skips
+# ssh-keygen.
 
 set -eu
 
 DATA="${SB_DATA_DIR:-/data}"
 ETC="${SB_ETC_DIR:-/etc}"
+VAR="${SB_VAR_DIR:-/var}"
 IDENT="${DATA}/system/identity"
 SSHDIR="${DATA}/system/ssh"
 NETDIR="${DATA}/system/network"
+
+# timesyncd's clock file: its mtime is the last time NTP was right, and
+# timesyncd moves the clock forward to it at start. On the overlay's
+# tmpfs it vanished at every power-off, so every boot started at the
+# image's build date: https looked broken (certificates "not yet valid")
+# until NTP answered, and the clock then jumped months.
+CLOCK="${VAR}/lib/systemd/timesync/clock"
+SAVED_CLOCK="${DATA}/system/timesync-clock"
 
 IDENTITY_FILES="passwd shadow group gshadow subuid subgid"
 SSH_KEY_TYPES="rsa ecdsa ed25519"
@@ -124,6 +134,12 @@ restore() {
 		ssh-keygen -A >/dev/null
 	fi
 
+	# cp -p keeps the mtime, which is the whole content.
+	if [ -f "${SAVED_CLOCK}" ]; then
+		mkdir -p "$(dirname "${CLOCK}")"
+		cp -p "${SAVED_CLOCK}" "${CLOCK}" 2>/dev/null || true
+	fi
+
 	# Wi-Fi (and any other) connections the Imager settings created.
 	if [ -d "${NETDIR}" ] && [ -d "${ETC}/NetworkManager" ]; then
 		mkdir -p "${ETC}/NetworkManager/system-connections"
@@ -152,6 +168,10 @@ save() {
 	NM="${ETC}/NetworkManager/system-connections"
 	if [ -d "${NM}" ] && [ -n "$(ls -A "${NM}" 2>/dev/null)" ]; then
 		cp -a "${NM}/." "${NETDIR}/"
+	fi
+
+	if [ -f "${CLOCK}" ]; then
+		cp -p "${CLOCK}" "${SAVED_CLOCK}" 2>/dev/null || true
 	fi
 
 	# The identity the initramfs seeds from on the next boot.

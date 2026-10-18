@@ -18,6 +18,7 @@ to or moved off `/data`, this list changes in the same commit.
 | account files | `/data/system/identity/{passwd,shadow,group,gshadow,subuid,subgid}` | `data-persist save` → restored by `data-persist restore` | the Imager-created user and password; without this they would vanish with the overlay |
 | SSH host keys | `/data/system/ssh/` | `ssh-keygen -A` at restore, saved back by `save` | `/etc/ssh/ssh_host_*` are symlinks here; keeps `known_hosts` stable |
 | network connections | `/data/system/network/` | `data-persist save` → restored by `restore`; boxd runs a save right after the setup hotspot joins a network | NetworkManager `system-connections` (Wi-Fi credentials). The hotspot's own access point is in-memory only and never lands here |
+| last known time | `/data/system/timesync-clock` | `data-persist save` → restored by `restore`, before timesyncd starts | timesyncd's clock file; only its mtime matters. timesyncd moves the clock forward to it at boot, so a box without an RTC doesn't start at the image's build date |
 
 Not on `/data`, still persistent:
 

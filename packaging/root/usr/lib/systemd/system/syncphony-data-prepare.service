@@ -4,10 +4,11 @@ Documentation=file:///usr/lib/syncphony-box/syncphony.txt
 # /data is mounted by the initramfs overlay script (with the fstab entry
 # as belt and braces), so this runs ahead of everything that reads the
 # state: cloud-init (which would create a fresh user), sshd (host keys),
-# NetworkManager (Wi-Fi) and the kiosk (the Chromium profile).
+# NetworkManager (Wi-Fi), timesyncd (the last known time) and the kiosk
+# (the Chromium profile).
 ConditionPathIsMountPoint=/data
 After=data.mount
-Before=cloud-init-local.service cloud-init.service ssh.service NetworkManager.service boxd.service syncphony-kiosk.service
+Before=cloud-init-local.service cloud-init.service ssh.service NetworkManager.service systemd-timesyncd.service boxd.service syncphony-kiosk.service
 
 [Service]
 Type=oneshot

@@ -55,7 +55,7 @@ var (
 	joinDelay     = 1 * time.Second  // let the phone get its answer before the AP goes away
 	recheckWait   = 45 * time.Second // how long NetworkManager gets to find a saved network
 	recheckPoll   = 3 * time.Second
-	healthzTries  = 6 // after a join: DHCP, DNS and the clock need a moment
+	healthzTries  = 24 // two minutes after a join for DHCP, DNS and the clock (see joinWiFi)
 	healthzRetry  = 5 * time.Second
 	netWatchEvery = 5 * time.Second
 )
@@ -401,16 +401,26 @@ func (d *Daemon) joinWiFi(ssid, password string, hidden bool, serverURL, name st
 	if serverURL == "" || d.configured() {
 		return
 	}
+	// The clock is usually what's slowest: a box without an RTC boots
+	// months behind, and every https certificate looks invalid until NTP
+	// corrects it, so the server "can't be reached" and isn't saved.
+	// timesyncd has been failing while the box was offline and retries
+	// on its own schedule; a restart asks NTP now, on the new network.
+	d.run("systemctl", "try-restart", "systemd-timesyncd.service")
+	var lastErr error
 	for i := 0; i < healthzTries; i++ {
 		if i > 0 {
 			time.Sleep(healthzRetry)
 		}
-		if checkHealthz(serverURL) {
+		if lastErr = healthz(serverURL); lastErr == nil {
 			if err := d.saveServer(serverURL, name, "the Wi-Fi setup"); err == nil {
 				return
 			}
 			break
 		}
+	}
+	if lastErr != nil {
+		d.log.Printf("boxd: wifi: joined %s, but %s didn't answer: %v", ssid, serverURL, lastErr)
 	}
 	d.mu.Lock()
 	d.net.notice = fmt.Sprintf("Joined %s, but couldn't reach %s. Set the server from a phone on %s.", ssid, serverURL, ssid)
