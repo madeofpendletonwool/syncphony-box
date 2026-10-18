@@ -92,6 +92,20 @@ sink_block() {
 	'
 }
 
+# Whether this is a Pi (its vc4/bcm2835 audio devices): the PC-only
+# HDMI handling below never touches a Pi's cards.
+on_pi() {
+	{ "$PACTL" list sinks; "$PACTL" list cards; } 2>/dev/null |
+		grep -qiE 'bcm2835|vc4'
+}
+
+# Whether a sink's port reports a display plugged in (PC HDMI/DP). An
+# empty name, or a Pi sink, is "not known to be plugged".
+sink_plugged() {
+	[ -n "$1" ] || return 1
+	sink_block "$1" | grep -q ', available)'
+}
+
 # Print the pulse sink name for audio=$1, or nothing. Markers are matched
 # against each sink's identifying text in order; the primary HDMI markers
 # are the vc4 driver's PCM names ("bcm2835 HDMI 1" = HDMI0, the port next
@@ -151,17 +165,60 @@ pick_sink() {
 		fi
 	done
 
-	# Not a Pi: the nth built-in HDMI/DisplayPort sink (n = 1 for hdmi,
-	# 2 for hdmi2).
+	# Not a Pi.
 	case $data in
 		*bcm2835*|*vc4*) return 0 ;;
 	esac
+	# A PC has one HDMI/DisplayPort output per port (a laptop: one per
+	# USB-C port), and nothing says which is "first": for hdmi, take the
+	# one with a display plugged in (its port reports available).
+	if [ "$audio" = hdmi ]; then
+		plugged=$(printf '%s\n' "$data" | awk -F '\t' '
+			$2 != "usb" && index($3, "hdmi") && index($3, ", available)") { print $1; exit }
+		')
+		if [ -n "$plugged" ]; then
+			printf '%s\n' "$plugged"
+			return 0
+		fi
+	fi
+	# Otherwise the nth built-in HDMI/DisplayPort sink (n = 1 for hdmi,
+	# 2 for hdmi2): the TV may be off, so its port says nothing.
 	n=1
 	[ "$audio" = hdmi2 ] && n=2
 	printf '%s\n' "$data" | awk -F '\t' -v n="$n" '
 		$2 != "usb" && index($3, "hdmi") && ++seen == n { print $1; exit }
 	'
 	return 0
+}
+
+# A PC's card shows only the outputs of its active profile, and
+# WirePlumber prefers the analog one (a laptop's speakers), so the HDMI
+# output with the TV on it may not be a sink at all. Switch the card to
+# an available HDMI profile ("available: yes" = a display is on that
+# port), output-only first. Pi cards don't have these profiles. Prints
+# the profile it switched to, or nothing.
+hdmi_profile() {
+	"$PACTL" list cards 2>/dev/null | awk '
+		function pick() {
+			# The card already on it: nothing to do (and nothing to loop on).
+			p = (solo != "") ? solo : any
+			if (out == "" && p != "" && p != active) out = card " " p
+			solo = ""; any = ""; active = ""
+		}
+		/^Card #/ { if (card != "") pick(); card = ""; inprof = 0 }
+		/^\tName: / { card = $2 }
+		/^\tActive Profile: / { active = $3 }
+		/^\tProfiles:/ { inprof = 1; next }
+		/^\t[^\t]/ { inprof = 0 }
+		inprof && /^\t\t/ && /available: yes\)/ {
+			prof = $1
+			sub(/:$/, "", prof)
+			if (prof !~ /hdmi/) next
+			if (prof !~ /\+/ && solo == "") solo = prof
+			if (any == "") any = prof
+		}
+		END { if (card != "") pick(); if (out != "") print out }
+	'
 }
 
 apply_once() {
@@ -183,6 +240,16 @@ apply_once() {
 	fi
 
 	sink=$(pick_sink "$audio")
+	if [ "$audio" = hdmi ] && ! on_pi && ! sink_plugged "$sink"; then
+		# shellcheck disable=SC2046 # two words: card, profile
+		set -- $(hdmi_profile)
+		if [ $# -eq 2 ]; then
+			log "switching ${1} to ${2} (a display is on that port)"
+			"$PACTL" set-card-profile "$1" "$2" 2>/dev/null || true
+			"$SLEEP" 1
+			sink=$(pick_sink "$audio")
+		fi
+	fi
 	i=0
 	while [ -z "$sink" ] && [ "$i" -lt "$SINK_WAIT_SECS" ]; do
 		"$SLEEP" 1
