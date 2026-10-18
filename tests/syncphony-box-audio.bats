@@ -32,7 +32,11 @@ case "\$1" in
 		exit 0
 		;;
 	list)
-		cat "${FIXTURE}"
+		if [ "\$2" = cards ]; then
+			[ -f "${WORK}/cards.txt" ] && cat "${WORK}/cards.txt"
+		else
+			cat "${FIXTURE}"
+		fi
 		;;
 	get-default-sink)
 		if [ -f "${WORK}/default_sink" ]; then cat "${WORK}/default_sink"; else echo "alsa_output.auto_null"; fi
@@ -493,4 +497,85 @@ PC_HDMI2=alsa_output.pci-0000_00_1f.3.hdmi-stereo-extra1
 	apply
 	[ "$status" -eq 0 ]
 	! called "set-default-sink ${HDMI1}"
+}
+
+# A laptop (a Framework: one HDMI/DisplayPort output per USB-C port), the
+# TV on the third port. The ports say which output has a display.
+sinks_pc_tv_on_port3() {
+	sinks_pc
+	cat >> "${FIXTURE}" <<'EOF2'
+
+Sink #53
+	State: SUSPENDED
+	Name: alsa_output.pci-0000_00_1f.3.hdmi-stereo-extra2
+	Description: Built-in Audio Digital Stereo (HDMI 3)
+	Driver: PipeWire
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	Ports:
+		hdmi-output-2: HDMI / DisplayPort 3 (type: HDMI, priority: 5700, availability group: Legacy 5, available)
+	Active Port: hdmi-output-2
+	Properties:
+		alsa.card_name = "HDA Intel PCH"
+		alsa.name = "HDMI 2"
+		device.bus = "pci"
+		device.description = "Built-in Audio Digital Stereo (HDMI 3)"
+EOF2
+	# The first two ports: nothing plugged.
+	sed -i 's|^\tDescription: Built-in Audio Digital Stereo (HDMI)$|&\n\tPorts:\n\t\thdmi-output-0: HDMI / DisplayPort (type: HDMI, priority: 5900, availability group: Legacy 3, not available)|' "${FIXTURE}"
+}
+
+# The same laptop with the card on its analog profile: no HDMI sinks at
+# all, but the card knows the TV is on the third port.
+cards_pc_analog_active() {
+	cat > "${WORK}/cards.txt" <<'EOF2'
+Card #45
+	Name: alsa_card.pci-0000_00_1f.3
+	Driver: alsa
+	Profiles:
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+		output:hdmi-stereo: Digital Stereo (HDMI) Output (sinks: 1, sources: 0, priority: 5900, available: no)
+		output:hdmi-stereo-extra2+input:analog-stereo: Digital Stereo (HDMI 3) Output + Analog Stereo Input (sinks: 1, sources: 1, priority: 5765, available: yes)
+		output:hdmi-stereo-extra2: Digital Stereo (HDMI 3) Output (sinks: 1, sources: 0, priority: 5700, available: yes)
+		output:analog-stereo+input:analog-stereo: Analog Stereo Duplex (sinks: 1, sources: 1, priority: 6565, available: yes)
+	Active Profile: output:analog-stereo+input:analog-stereo
+EOF2
+}
+
+@test "hdmi on a PC picks the output with the TV plugged in, not the first" {
+	sinks_pc_tv_on_port3
+	set_audio hdmi
+	apply
+	[ "$status" -eq 0 ]
+	called "set-default-sink alsa_output.pci-0000_00_1f.3.hdmi-stereo-extra2"
+}
+
+@test "hdmi on a PC switches the card to the HDMI profile the TV is on" {
+	sinks_pc
+	sed -i '/^Sink #51/,$d' "${FIXTURE}" # analog only: the card is on its analog profile
+	cards_pc_analog_active
+	set_audio hdmi
+	apply
+	[ "$status" -eq 0 ]
+	called "set-card-profile alsa_card.pci-0000_00_1f.3 output:hdmi-stereo-extra2"
+}
+
+@test "an HDMI profile already active is not switched again (no monitor loop)" {
+	sinks_pc
+	cards_pc_analog_active
+	sed -i 's|^\tActive Profile: .*|\tActive Profile: output:hdmi-stereo-extra2|' "${WORK}/cards.txt"
+	set_audio hdmi
+	apply
+	[ "$status" -eq 0 ]
+	! grep -q '^set-card-profile' "${CALLS}"
+}
+
+@test "a Pi's cards are never switched" {
+	sinks_pi4
+	cards_pc_analog_active
+	set_audio hdmi
+	apply
+	[ "$status" -eq 0 ]
+	! grep -q '^set-card-profile' "${CALLS}"
+	called "set-default-sink ${HDMI0}"
 }

@@ -74,6 +74,25 @@ Add to `## [Unreleased]` as you go; rename it when you tag.
 - A box with no clock battery could start the nightly update the moment
   it first got online (the clock correcting itself made the timer fire).
   Timer runs outside the 04:00 hour are skipped.
+- The kiosk restarted every few minutes on a server reached over the
+  internet. Chromium 142+ asks permission before a public site may call
+  the box's helper on `127.0.0.1`, nobody can answer that in a kiosk, so
+  the page's heartbeats never arrived and the watchdog took it for stuck.
+  The box now sets a Chromium policy allowing its configured server.
+- On a PC, audio went to the first HDMI/DisplayPort output rather than
+  the one the TV is on (a laptop has one per USB-C port), so the TV was
+  silent. It now picks the output with a display plugged in, switching
+  the sound card's profile to it when needed.
+- After joining Wi-Fi from the setup hotspot, the server was often not
+  saved ("couldn't reach"), because the box's clock was still months
+  behind and https failed. The box now asks NTP right after joining and
+  checks the server for two minutes, and it keeps its last known time
+  on `/data`, so it no longer boots at the image's build date.
+- Joining a network right after the setup hotspot closed could fail with
+  "couldn't find <network>" because the scan hadn't finished; the join
+  now waits for the network to show up.
+- Wi-Fi power saving is off: some cards (MediaTek mt7921) stopped
+  answering ping and SSH while the box was idle.
 
 ### Changed
 - The image is smaller: documentation, man pages and translations are

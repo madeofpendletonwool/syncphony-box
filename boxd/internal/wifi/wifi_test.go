@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // script is a scripted nmcli: replies by the joined args' prefix, and a
@@ -30,6 +31,9 @@ func (s *script) nmcli(args ...string) (string, error) {
 	}
 	return "", nil
 }
+
+// No real waits between rescans in tests.
+func init() { sleep = func(time.Duration) {} }
 
 func newScripted(s *script) *NM {
 	return NewWith(s.nmcli, func(string) ([]byte, error) {
@@ -190,6 +194,46 @@ func TestConnect(t *testing.T) {
 	newScripted(s).Connect("wlan0", "Open", "", true)
 	if c := s.calls[len(s.calls)-1]; c != "--wait 45 device wifi connect Open ifname wlan0 name Open hidden yes" {
 		t.Errorf("open hidden connect = %q", c)
+	}
+}
+
+func TestConnectWaitsForTheNetworkToShow(t *testing.T) {
+	slept := 0
+	prev := sleep
+	sleep = func(time.Duration) { slept++ }
+	defer func() { sleep = prev }()
+
+	// In the list (a comma in the name is just a character to nmcli).
+	ssid := "my cool, big network"
+	s := &script{replies: map[string]string{"-t -f SSID device wifi list": "Other\n" + ssid + "\n"}}
+	if err := newScripted(s).Connect("wlan0", ssid, "hunter22", false); err != nil {
+		t.Fatal(err)
+	}
+	scans := 0
+	for _, c := range s.calls {
+		if strings.HasPrefix(c, "-t -f SSID device wifi list ifname wlan0 --rescan yes") {
+			scans++
+		}
+	}
+	if scans != 1 || slept != 0 {
+		t.Errorf("scans = %d, slept = %d; want one scan, no wait", scans, slept)
+	}
+	if last := s.calls[len(s.calls)-1]; last != "--wait 45 device wifi connect "+ssid+" password hunter22 ifname wlan0 name "+ssid {
+		t.Errorf("connect = %q", last)
+	}
+
+	// Never shows: a few scans, then the connect anyway (its error says why).
+	s = &script{replies: map[string]string{"-t -f SSID device wifi list": "Other\n"}}
+	slept = 0
+	newScripted(s).Connect("wlan0", "Home", "hunter22", false)
+	scans = 0
+	for _, c := range s.calls {
+		if strings.HasPrefix(c, "-t -f SSID device wifi list") {
+			scans++
+		}
+	}
+	if scans != visibleTries || slept != visibleTries-1 || !strings.HasPrefix(s.calls[len(s.calls)-1], "--wait 45 device wifi connect Home") {
+		t.Errorf("scans = %d, slept = %d, calls %q", scans, slept, s.calls)
 	}
 }
 

@@ -20,6 +20,11 @@ const (
 	DefaultCmdlinePath = "/boot/firmware/cmdline.txt"
 	DefaultHostsPath   = "/etc/hosts"
 
+	// DefaultPolicyPath is the kiosk's Chromium managed policy (Debian's
+	// chromium reads /etc/chromium/policies/managed/*.json). /etc is the
+	// overlay's tmpfs: Apply rewrites it on every boot.
+	DefaultPolicyPath = "/etc/chromium/policies/managed/syncphony-box.json"
+
 	// DefaultGrubCmdlinePath is the kernel command line on an x86 box
 	// (MAD-846, ADR 0013). /boot/firmware is the EFI system partition
 	// there, and GRUB can't read a plain file into the command line, so

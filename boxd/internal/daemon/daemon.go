@@ -8,6 +8,7 @@ package daemon
 
 import (
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -353,12 +354,20 @@ func (d *Daemon) serverReachable() bool {
 }
 
 func checkHealthz(server string) bool {
+	return healthz(server) == nil
+}
+
+// healthz is checkHealthz with the reason, for the log.
+func healthz(server string) error {
 	resp, err := healthzClient.Get(strings.TrimSuffix(server, "/") + "/healthz")
 	if err != nil {
-		return false
+		return err
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode >= 200 && resp.StatusCode < 300
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // flushDisk makes the pairing state durable: a sync() burst after the

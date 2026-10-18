@@ -11,8 +11,9 @@ setup() {
 	WORK="$(mktemp -d)"
 	DATA="${WORK}/data"
 	ETC="${WORK}/etc"
-	mkdir -p "${DATA}" "${ETC}/ssh"
-	export SB_DATA_DIR="${DATA}" SB_ETC_DIR="${ETC}"
+	VAR="${WORK}/var"
+	mkdir -p "${DATA}" "${ETC}/ssh" "${VAR}"
+	export SB_DATA_DIR="${DATA}" SB_ETC_DIR="${ETC}" SB_VAR_DIR="${VAR}"
 }
 
 teardown() {
@@ -107,6 +108,18 @@ fake_identity() {
 	[ "$status" -eq 0 ]
 	grep -q 'ssid=Home' "${ETC}/NetworkManager/system-connections/Home.nmconnection"
 	[ -L "${ETC}/ssh/ssh_host_ed25519_key" ]
+}
+
+@test "timesyncd's clock file keeps its mtime through save and restore" {
+	mkdir -p "${VAR}/lib/systemd/timesync"
+	touch -d '2026-10-17 17:30:00' "${VAR}/lib/systemd/timesync/clock"
+	run "${SCRIPT}" save
+	[ "$status" -eq 0 ]
+
+	rm -rf "${VAR}/lib"
+	run "${SCRIPT}" restore
+	[ "$status" -eq 0 ]
+	[ "$(stat -c %Y "${VAR}/lib/systemd/timesync/clock")" = "$(date -d '2026-10-17 17:30:00' +%s)" ]
 }
 
 @test "save persists the machine-id for the initramfs seed" {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/config"
 	"github.com/madeofpendletonwool/syncphony-box/boxd/internal/update"
 )
 
@@ -65,25 +66,7 @@ func allowedHost(host string) bool {
 // serverOrigin is the configured server's origin (scheme://host[:port]) —
 // the only Origin the bridge accepts (ADR 0016). Empty when unconfigured.
 func (d *Daemon) serverOrigin() string {
-	server := d.serverURL()
-	if server == "" {
-		return ""
-	}
-	u := server
-	if i := strings.Index(u, "://"); i >= 0 {
-		u = u[i+3:]
-	}
-	if i := strings.IndexAny(u, "/?#"); i >= 0 {
-		u = u[:i]
-	}
-	if u == "" {
-		return ""
-	}
-	scheme := "https"
-	if strings.HasPrefix(server, "http://") {
-		scheme = "http"
-	}
-	return scheme + "://" + strings.ToLower(u)
+	return config.ServerOrigin(d.serverURL())
 }
 
 func (d *Daemon) originAllowed(origin string) bool {
